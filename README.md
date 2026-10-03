@@ -91,3 +91,5 @@ npm run build
 ```
 
 The application will run locally at `http://localhost:5174/` (or port 5173).
+
+NOVATAS 2K26 deployment update
