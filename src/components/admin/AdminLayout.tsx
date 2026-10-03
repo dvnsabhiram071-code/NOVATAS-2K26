@@ -13,7 +13,9 @@ import {
   Sparkles,
   ShieldCheck,
   PhoneCall,
-  HelpCircle
+  HelpCircle,
+  Database,
+  RefreshCw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { AdminTab } from '../../types';
@@ -35,8 +37,19 @@ export const AdminLayout: React.FC<{ onExitAdmin: () => void; initialTab?: Admin
     activeAdminTab, 
     setActiveAdminTab, 
     setIsAdminLoggedIn, 
-    applications 
+    applications,
+    isCloudConnected,
+    refreshData,
+    isLoadingData
   } = useApp();
+
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
+
+  const handleManualSync = async () => {
+    setIsRefreshing(true);
+    await refreshData();
+    setTimeout(() => setIsRefreshing(false), 600);
+  };
 
   const session = adminAuthService.getSession();
 
@@ -103,6 +116,30 @@ export const AdminLayout: React.FC<{ onExitAdmin: () => void; initialTab?: Admin
           </div>
 
           <div className="flex items-center space-x-3">
+            {/* Database status and manual sync */}
+            <div className="hidden md:flex items-center space-x-2">
+              <span 
+                className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase border ${
+                  isCloudConnected
+                    ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-400'
+                    : 'bg-cyan-950/70 border-cyan-500/40 text-cyan-400'
+                }`}
+                title={isCloudConnected ? 'Connected to Supabase PostgreSQL' : 'Persistent Storage Active (Add Supabase env vars in Vercel to connect cloud database)'}
+              >
+                <Database className="w-3 h-3" />
+                <span>{isCloudConnected ? 'SUPABASE LIVE' : 'DATABASE PERSISTENT'}</span>
+              </span>
+
+              <button
+                onClick={handleManualSync}
+                disabled={isRefreshing || isLoadingData}
+                title="Sync database with latest records"
+                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+              </button>
+            </div>
+
             <div className="hidden sm:flex flex-col items-end text-right">
               <div className="flex items-center space-x-1.5 text-xs font-mono text-slate-300">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />

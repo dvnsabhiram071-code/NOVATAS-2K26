@@ -4,17 +4,18 @@ import {
   VolunteerEvent, 
   AdminSettings, 
   AdminTab,
-  ContactPerson,
+  ContactPerson, 
   FAQItem
 } from '../types';
 import { 
   INITIAL_APPLICATIONS, 
   INITIAL_EVENTS, 
   INITIAL_SETTINGS,
-  INITIAL_CONTACTS,
+  INITIAL_CONTACTS, 
   INITIAL_FAQS
 } from '../data/initialData';
 import { adminAuthService } from '../services/adminAuthService';
+import { dbService } from '../services/db';
 
 interface AppContextType {
   applications: VolunteerApplication[];
@@ -26,6 +27,9 @@ interface AppContextType {
   activeAdminTab: AdminTab;
   setActiveAdminTab: (tab: AdminTab) => void;
   setIsAdminLoggedIn: (val: boolean) => void;
+  isCloudConnected: boolean;
+  isLoadingData: boolean;
+  refreshData: () => Promise<void>;
   
   // Public Modals / Screens
   isRegisterModalOpen: boolean;
@@ -70,60 +74,14 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const STORAGE_KEYS = {
-  APPLICATIONS: 'novatas_2k26_applications_v2',
-  EVENTS: 'novatas_2k26_events_v2',
-  SETTINGS: 'novatas_2k26_settings_v2',
-  CONTACTS: 'novatas_2k26_contacts_v2',
-  FAQS: 'novatas_2k26_faqs_v2',
-  ADMIN_AUTH: 'novatas_2k26_admin_auth_v2'
-};
-
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [applications, setApplications] = useState<VolunteerApplication[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.APPLICATIONS);
-      return saved ? JSON.parse(saved) : INITIAL_APPLICATIONS;
-    } catch {
-      return INITIAL_APPLICATIONS;
-    }
-  });
-
-  const [events, setEvents] = useState<VolunteerEvent[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.EVENTS);
-      return saved ? JSON.parse(saved) : INITIAL_EVENTS;
-    } catch {
-      return INITIAL_EVENTS;
-    }
-  });
-
-  const [settings, setSettings] = useState<AdminSettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
-    } catch {
-      return INITIAL_SETTINGS;
-    }
-  });
-
-  const [contacts, setContacts] = useState<ContactPerson[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CONTACTS);
-      return saved ? JSON.parse(saved) : INITIAL_CONTACTS;
-    } catch {
-      return INITIAL_CONTACTS;
-    }
-  });
-
-  const [faqs, setFaqs] = useState<FAQItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.FAQS);
-      return saved ? JSON.parse(saved) : INITIAL_FAQS;
-    } catch {
-      return INITIAL_FAQS;
-    }
-  });
+  const [applications, setApplications] = useState<VolunteerApplication[]>(INITIAL_APPLICATIONS);
+  const [events, setEvents] = useState<VolunteerEvent[]>(INITIAL_EVENTS);
+  const [settings, setSettings] = useState<AdminSettings>(INITIAL_SETTINGS);
+  const [contacts, setContacts] = useState<ContactPerson[]>(INITIAL_CONTACTS);
+  const [faqs, setFaqs] = useState<FAQItem[]>(INITIAL_FAQS);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
+  const [isCloudConnected, setIsCloudConnected] = useState<boolean>(() => dbService.isCloudConnected());
 
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => {
     return adminAuthService.isAuthenticated();
@@ -134,30 +92,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [statusLookupUSN, setStatusLookupUSN] = useState('');
 
-  // Persist whenever state changes
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.APPLICATIONS, JSON.stringify(applications));
-  }, [applications]);
+  // Primary Database Loader
+  const refreshData = async () => {
+    try {
+      setIsCloudConnected(dbService.isCloudConnected());
+      const [appsData, eventsData, contactsData, faqsData, settingsData] = await Promise.all([
+        dbService.getApplications(),
+        dbService.getEvents(),
+        dbService.getContacts(),
+        dbService.getFaqs(),
+        dbService.getSettings()
+      ]);
+      setApplications(appsData);
+      setEvents(eventsData);
+      setContacts(contactsData);
+      setFaqs(faqsData);
+      setSettings(settingsData);
+    } catch (err) {
+      console.error('Failed to refresh data from database:', err);
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(events));
-  }, [events]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CONTACTS, JSON.stringify(contacts));
-  }, [contacts]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.FAQS, JSON.stringify(faqs));
-  }, [faqs]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, String(isAdminLoggedIn));
-  }, [isAdminLoggedIn]);
+    refreshData();
+  }, []);
 
   // Submit new application: NEVER generates Volunteer ID, QR, or final assignment
   const submitApplication = (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>): VolunteerApplication => {
@@ -184,6 +144,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setApplications(prev => [newApp, ...prev]);
+    // Persist to database
+    dbService.saveApplication(newApp);
+
     return newApp;
   };
 
@@ -192,7 +155,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const matchedEvt = events.find(e => e.name.toLowerCase() === event1.toLowerCase());
     setApplications(prev => prev.map(app => {
       if (app.id !== id) return app;
-      return {
+      const updated: VolunteerApplication = {
         ...app,
         assignedEvent1: event1,
         assignedEvent2: event2 || undefined,
@@ -200,7 +163,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         volunteerRole: role || app.volunteerRole,
         updatedAt: new Date().toISOString()
       };
+      dbService.saveApplication(updated);
+      return updated;
     }));
+
+    adminAuthService.logAudit('EVENT_ASSIGNED', 'APPLICATION', id, `Assigned to ${event1}${role ? ` (${role})` : ''}`);
   };
 
   // Approve Application: Strict verification & generation of Volunteer ID + QR
@@ -227,7 +194,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       succeeded = true;
 
-      return {
+      const updated: VolunteerApplication = {
         ...app,
         status: 'APPROVED',
         volunteerId,
@@ -239,7 +206,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updatedAt: new Date().toISOString(),
         rejectionReason: undefined
       };
+
+      dbService.saveApplication(updated);
+      return updated;
     }));
+
+    if (succeeded) {
+      adminAuthService.logAudit('APPLICATION_APPROVED', 'APPLICATION', id, `Approved and assigned to ${finalEvent || 'Event'}`);
+    }
 
     return succeeded;
   };
@@ -248,7 +222,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const rejectApplication = (id: string, reason: string) => {
     setApplications(prev => prev.map(app => {
       if (app.id !== id) return app;
-      return {
+      const updated: VolunteerApplication = {
         ...app,
         status: 'REJECTED',
         rejectionReason: reason || 'Requirements not met at this time.',
@@ -256,7 +230,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         qrToken: undefined,
         updatedAt: new Date().toISOString()
       };
+      dbService.saveApplication(updated);
+      return updated;
     }));
+
+    adminAuthService.logAudit('APPLICATION_REJECTED', 'APPLICATION', id, `Reason: ${reason}`);
   };
 
   // Soft Delete Application
@@ -265,10 +243,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (app.id !== id) return app;
       return { 
         ...app, 
-        isDeleted: true,
+        isDeleted: true, 
         updatedAt: new Date().toISOString()
       };
     }));
+    dbService.deleteApplication(id);
+    adminAuthService.logAudit('APPLICATION_DELETED', 'APPLICATION', id, 'Soft-deleted application');
   };
 
   // Bulk Assign
@@ -276,13 +256,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const matchedEvt = events.find(e => e.name.toLowerCase() === eventName.toLowerCase());
     setApplications(prev => prev.map(app => {
       if (!ids.includes(app.id)) return app;
-      return {
+      const updated: VolunteerApplication = {
         ...app,
         assignedEvent1: eventName,
         assignedCategory: matchedEvt ? matchedEvt.category : app.assignedCategory,
         updatedAt: new Date().toISOString()
       };
+      dbService.saveApplication(updated);
+      return updated;
     }));
+    adminAuthService.logAudit('BULK_ASSIGNED', 'APPLICATION', ids.join(','), `Bulk assigned to ${eventName}`);
   };
 
   // QR or ID Check-in
@@ -318,13 +301,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const updated = {
+    const updated: VolunteerApplication = {
       ...found,
       checkedIn: true,
       checkedInAt: timeNow
     };
 
     setApplications(prev => prev.map(a => a.id === found.id ? updated : a));
+    dbService.saveApplication(updated);
+    adminAuthService.logAudit('CHECK_IN_RECORDED', 'VOLUNTEER', found.id, `Checked in at ${timeNow}`);
 
     return {
       success: true,
@@ -338,14 +323,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const id = `evt-${eventData.name.toLowerCase().replace(/\s+/g, '')}-${Date.now().toString().slice(-4)}`;
     const newEvent: VolunteerEvent = { ...eventData, id };
     setEvents(prev => [...prev, newEvent]);
+    dbService.saveEvent(newEvent);
+    adminAuthService.logAudit('EVENT_CREATED', 'EVENT', id, newEvent.name);
   };
 
   const updateEvent = (id: string, data: Partial<VolunteerEvent>) => {
-    setEvents(prev => prev.map(evt => evt.id === id ? { ...evt, ...data } : evt));
+    setEvents(prev => prev.map(evt => {
+      if (evt.id !== id) return evt;
+      const updated: VolunteerEvent = { ...evt, ...data };
+      dbService.saveEvent(updated);
+      return updated;
+    }));
+    adminAuthService.logAudit('EVENT_UPDATED', 'EVENT', id, 'Updated event details');
   };
 
   const deleteEvent = (id: string) => {
     setEvents(prev => prev.filter(evt => evt.id !== id));
+    dbService.deleteEvent(id);
+    adminAuthService.logAudit('EVENT_DELETED', 'EVENT', id, 'Deleted event');
   };
 
   // Contact Management
@@ -358,26 +353,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString()
     };
     setContacts(prev => [...prev, newContact]);
+    dbService.saveContact(newContact);
+    adminAuthService.logAudit('CONTACT_CREATED', 'CONTACT', id, newContact.name);
   };
 
   const updateContact = (id: string, data: Partial<ContactPerson>) => {
-    setContacts(prev => prev.map(c => 
-      c.id === id 
-        ? { ...c, ...data, updatedAt: new Date().toISOString() } 
-        : c
-    ));
+    setContacts(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const updated: ContactPerson = { ...c, ...data, updatedAt: new Date().toISOString() };
+      dbService.saveContact(updated);
+      return updated;
+    }));
+    adminAuthService.logAudit('CONTACT_UPDATED', 'CONTACT', id, 'Updated contact');
   };
 
   const deleteContact = (id: string) => {
     setContacts(prev => prev.filter(c => c.id !== id));
+    dbService.deleteContact(id);
+    adminAuthService.logAudit('CONTACT_DELETED', 'CONTACT', id, 'Deleted contact');
   };
 
   const toggleContactStatus = (id: string) => {
-    setContacts(prev => prev.map(c => 
-      c.id === id 
-        ? { ...c, status: c.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', updatedAt: new Date().toISOString() } 
-        : c
-    ));
+    setContacts(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const updated: ContactPerson = { 
+        ...c, 
+        status: c.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', 
+        updatedAt: new Date().toISOString() 
+      };
+      dbService.saveContact(updated);
+      return updated;
+    }));
   };
 
   const reorderContacts = (orderedIds: string[]) => {
@@ -385,7 +391,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return prev.map(c => {
         const idx = orderedIds.indexOf(c.id);
         if (idx !== -1) {
-          return { ...c, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
+          const updated = { ...c, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
+          dbService.saveContact(updated);
+          return updated;
         }
         return c;
       });
@@ -402,26 +410,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString()
     };
     setFaqs(prev => [...prev, newFAQ]);
+    dbService.saveFaq(newFAQ);
+    adminAuthService.logAudit('FAQ_CREATED', 'FAQ', id, newFAQ.question);
   };
 
   const updateFAQ = (id: string, data: Partial<FAQItem>) => {
-    setFaqs(prev => prev.map(f => 
-      f.id === id 
-        ? { ...f, ...data, updatedAt: new Date().toISOString() } 
-        : f
-    ));
+    setFaqs(prev => prev.map(f => {
+      if (f.id !== id) return f;
+      const updated: FAQItem = { ...f, ...data, updatedAt: new Date().toISOString() };
+      dbService.saveFaq(updated);
+      return updated;
+    }));
+    adminAuthService.logAudit('FAQ_UPDATED', 'FAQ', id, 'Updated FAQ');
   };
 
   const deleteFAQ = (id: string) => {
     setFaqs(prev => prev.filter(f => f.id !== id));
+    dbService.deleteFaq(id);
+    adminAuthService.logAudit('FAQ_DELETED', 'FAQ', id, 'Deleted FAQ');
   };
 
   const toggleFAQStatus = (id: string) => {
-    setFaqs(prev => prev.map(f => 
-      f.id === id 
-        ? { ...f, status: f.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', updatedAt: new Date().toISOString() } 
-        : f
-    ));
+    setFaqs(prev => prev.map(f => {
+      if (f.id !== id) return f;
+      const updated: FAQItem = { 
+        ...f, 
+        status: f.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', 
+        updatedAt: new Date().toISOString() 
+      };
+      dbService.saveFaq(updated);
+      return updated;
+    }));
   };
 
   const reorderFAQs = (orderedIds: string[]) => {
@@ -429,7 +448,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return prev.map(f => {
         const idx = orderedIds.indexOf(f.id);
         if (idx !== -1) {
-          return { ...f, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
+          const updated = { ...f, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
+          dbService.saveFaq(updated);
+          return updated;
         }
         return f;
       });
@@ -438,7 +459,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Settings
   const updateSettings = (newSettings: Partial<AdminSettings>) => {
-    setSettings(prev => ({ ...prev, ...newSettings }));
+    setSettings(prev => {
+      const updated = { ...prev, ...newSettings };
+      dbService.saveSettings(updated);
+      return updated;
+    });
+    adminAuthService.logAudit('SETTINGS_UPDATED', 'SETTINGS', 'singleton', 'Updated portal settings');
   };
 
   const resetDemoData = () => {
@@ -447,11 +473,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSettings(INITIAL_SETTINGS);
     setContacts(INITIAL_CONTACTS);
     setFaqs(INITIAL_FAQS);
-    localStorage.removeItem(STORAGE_KEYS.APPLICATIONS);
-    localStorage.removeItem(STORAGE_KEYS.EVENTS);
-    localStorage.removeItem(STORAGE_KEYS.SETTINGS);
-    localStorage.removeItem(STORAGE_KEYS.CONTACTS);
-    localStorage.removeItem(STORAGE_KEYS.FAQS);
+    INITIAL_APPLICATIONS.forEach(a => dbService.saveApplication(a));
+    INITIAL_EVENTS.forEach(e => dbService.saveEvent(e));
+    INITIAL_CONTACTS.forEach(c => dbService.saveContact(c));
+    INITIAL_FAQS.forEach(f => dbService.saveFaq(f));
+    dbService.saveSettings(INITIAL_SETTINGS);
   };
 
   return (
@@ -466,6 +492,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeAdminTab,
         setActiveAdminTab,
         setIsAdminLoggedIn,
+        isCloudConnected,
+        isLoadingData,
+        refreshData,
         isRegisterModalOpen,
         setIsRegisterModalOpen,
         isStatusModalOpen,
@@ -493,7 +522,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleFAQStatus,
         reorderFAQs,
         updateSettings,
-        resetDemoData
+        resetDemoData,
       }}
     >
       {children}

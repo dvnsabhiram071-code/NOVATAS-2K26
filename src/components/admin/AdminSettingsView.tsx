@@ -62,6 +62,12 @@ export const AdminSettingsView: React.FC = () => {
     refreshAuditLogs();
   }, []);
 
+  useEffect(() => {
+    setEventName(settings.eventName);
+    setDepartment(settings.department);
+    setIsRegistrationOpen(settings.isRegistrationOpen);
+  }, [settings]);
+
   const refreshAccounts = () => {
     setAdminAccounts(adminAuthService.listAdminAccounts());
   };
