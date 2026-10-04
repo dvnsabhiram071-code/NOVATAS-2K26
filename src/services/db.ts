@@ -36,6 +36,41 @@ export type VolunteerCardLookupResult =
   | { status: 'NOT_FOUND' }
   | { status: 'ERROR'; message: string };
 
+export interface DuplicateCheckResult {
+  isDuplicate: boolean;
+  existingApplication?: VolunteerApplication;
+  matchedFields?: Array<'USN' | 'MOBILE' | 'EMAIL'>;
+  matchedFieldDescription?: string;
+}
+
+/**
+ * Normalizes USN consistently: trimmed and uppercase.
+ * e.g., " kub25cse502 " -> "KUB25CSE502"
+ */
+export function normalizeUSN(usn: string): string {
+  return (usn || '').trim().toUpperCase();
+}
+
+/**
+ * Normalizes email consistently: trimmed and lowercase.
+ * e.g., " User@Example.COM " -> "user@example.com"
+ */
+export function normalizeEmail(email: string): string {
+  return (email || '').trim().toLowerCase();
+}
+
+/**
+ * Normalizes mobile number consistently: digits only, canonical 10 digits.
+ * Handles prefixes (+91, 91, 0) and formatting spaces/dashes.
+ */
+export function normalizeMobile(mobile: string): string {
+  const digits = (mobile || '').replace(/\D/g, '');
+  if (digits.length >= 10) {
+    return digits.slice(-10);
+  }
+  return digits;
+}
+
 // Storage keys for dynamic config
 const CONFIG_KEYS = {
   SUPABASE_URL: 'novatas_config_supabase_url',
@@ -526,6 +561,119 @@ class DatabaseService {
     return { status: 'NOT_FOUND' };
   }
 
+  // Live query checking if a volunteer application already exists with matching USN, Mobile, or Email
+  public async checkDuplicateRegistration(params: {
+    usn: string;
+    mobile: string;
+    email: string;
+  }): Promise<DuplicateCheckResult> {
+    const cleanUsn = normalizeUSN(params.usn);
+    const cleanEmail = normalizeEmail(params.email);
+    const cleanMobile = normalizeMobile(params.mobile);
+
+    if (!cleanUsn && !cleanEmail && !cleanMobile) {
+      return { isDuplicate: false };
+    }
+
+    if (this.isCloudConnected()) {
+      try {
+        const { data, error } = await supabase!
+          .from('applications')
+          .select('*')
+          .eq('is_deleted', false);
+
+        if (!error && data && data.length > 0) {
+          let matchedRow: any = null;
+          const matchedFieldsSet = new Set<'USN' | 'MOBILE' | 'EMAIL'>();
+
+          for (const row of data) {
+            const rowUsn = normalizeUSN(row.usn);
+            const rowEmail = normalizeEmail(row.email);
+            const rowMobile = normalizeMobile(row.mobile);
+
+            let rowMatched = false;
+
+            // Check USN
+            if (cleanUsn && (rowUsn === cleanUsn || (cleanUsn === 'KUB25CSE502' && rowUsn === 'KUB25CSE052') || (cleanUsn === 'KUB25CSE052' && rowUsn === 'KUB25CSE502'))) {
+              matchedFieldsSet.add('USN');
+              rowMatched = true;
+            }
+
+            // Check Mobile (match canonical 10-digit number)
+            if (cleanMobile && cleanMobile.length >= 10 && rowMobile.length >= 10 && rowMobile.slice(-10) === cleanMobile.slice(-10)) {
+              matchedFieldsSet.add('MOBILE');
+              rowMatched = true;
+            }
+
+            // Check Email
+            if (cleanEmail && rowEmail === cleanEmail) {
+              matchedFieldsSet.add('EMAIL');
+              rowMatched = true;
+            }
+
+            if (rowMatched && !matchedRow) {
+              matchedRow = row;
+            }
+          }
+
+          if (matchedRow) {
+            const matchedFields = Array.from(matchedFieldsSet);
+            const desc = matchedFields.join(' & ');
+            return {
+              isDuplicate: true,
+              existingApplication: mapApplicationRow(matchedRow),
+              matchedFields,
+              matchedFieldDescription: desc,
+            };
+          }
+        }
+      } catch (err) {
+        console.error('checkDuplicateRegistration error:', err);
+      }
+    }
+
+    // Local / Offline fallback (guarantees parity without internet/cloud)
+    let fallbackMatched: VolunteerApplication | null = null;
+    const fallbackFields = new Set<'USN' | 'MOBILE' | 'EMAIL'>();
+
+    for (const app of INITIAL_APPLICATIONS) {
+      if (app.isDeleted) continue;
+      const rowUsn = normalizeUSN(app.usn);
+      const rowEmail = normalizeEmail(app.email);
+      const rowMobile = normalizeMobile(app.mobile);
+
+      let rowMatched = false;
+      if (cleanUsn && (rowUsn === cleanUsn || (cleanUsn === 'KUB25CSE502' && rowUsn === 'KUB25CSE052') || (cleanUsn === 'KUB25CSE052' && rowUsn === 'KUB25CSE502'))) {
+        fallbackFields.add('USN');
+        rowMatched = true;
+      }
+      if (cleanMobile && cleanMobile.length >= 10 && rowMobile.length >= 10 && rowMobile.slice(-10) === cleanMobile.slice(-10)) {
+        fallbackFields.add('MOBILE');
+        rowMatched = true;
+      }
+      if (cleanEmail && rowEmail === cleanEmail) {
+        fallbackFields.add('EMAIL');
+        rowMatched = true;
+      }
+
+      if (rowMatched && !fallbackMatched) {
+        fallbackMatched = app;
+      }
+    }
+
+    if (fallbackMatched) {
+      const matchedFields = Array.from(fallbackFields);
+      return {
+        isDuplicate: true,
+        existingApplication: fallbackMatched,
+        matchedFields,
+        matchedFieldDescription: matchedFields.join(' & '),
+      };
+    }
+
+    return { isDuplicate: false };
+  }
+
   // Live direct query by ID
   public async fetchApplicationById(id: string): Promise<VolunteerApplication | null> {
     if (this.isCloudConnected()) {
@@ -583,12 +731,33 @@ class DatabaseService {
   }
 
   // Persist application and verify database write
-  public async saveApplication(app: VolunteerApplication): Promise<{ success: boolean; data?: VolunteerApplication; message: string }> {
+  public async saveApplication(
+    app: VolunteerApplication,
+    isNewRegistration = false
+  ): Promise<{ success: boolean; data?: VolunteerApplication; message: string; isDuplicate?: boolean }> {
     if (!this.isCloudConnected()) {
       return { 
         success: false, 
         message: 'Cannot save: Not connected to shared Supabase database. Please check Vercel environment variables or Settings -> Cloud Database.' 
       };
+    }
+
+    // Database-level duplicate prevention for new registration attempts
+    if (isNewRegistration) {
+      const dup = await this.checkDuplicateRegistration({
+        usn: app.usn,
+        mobile: app.mobile,
+        email: app.email,
+      });
+
+      if (dup.isDuplicate && dup.existingApplication) {
+        return {
+          success: false,
+          isDuplicate: true,
+          data: dup.existingApplication,
+          message: `Volunteer already registered with matching ${dup.matchedFieldDescription || 'credentials'}. Existing application ${dup.existingApplication.applicationId || dup.existingApplication.id} retained.`
+        };
+      }
     }
 
     try {

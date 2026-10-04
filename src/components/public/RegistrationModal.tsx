@@ -13,10 +13,15 @@ import {
   Sparkles, 
   Search,
   ShieldAlert,
-  Clock
+  Clock,
+  Loader2,
+  XCircle,
+  Edit3
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useApp } from '../../context/AppContext';
+import { dbService } from '../../services/db';
+import { VolunteerApplication } from '../../types';
 
 export const RegistrationModal: React.FC = () => {
   const { 
@@ -45,6 +50,11 @@ export const RegistrationModal: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [preferenceWarning, setPreferenceWarning] = useState<string>('');
   const [submittedAppId, setSubmittedAppId] = useState<string | null>(null);
+
+  // Duplicate registration tracking state
+  const [duplicateRecord, setDuplicateRecord] = useState<VolunteerApplication | null>(null);
+  const [duplicateMatchedFields, setDuplicateMatchedFields] = useState<string[]>([]);
+  const [isCheckingDuplicate, setIsCheckingDuplicate] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -87,9 +97,34 @@ export const RegistrationModal: React.FC = () => {
     return true;
   };
 
-  const handleNext = () => {
-    if (currentStep === 1 && validateStep1()) {
-      setCurrentStep(2);
+  const handleNext = async () => {
+    if (currentStep === 1) {
+      if (!validateStep1()) return;
+
+      setIsCheckingDuplicate(true);
+      setErrors({});
+      try {
+        // Query Supabase directly to verify whether this volunteer is already registered BEFORE photo upload
+        const dupCheck = await dbService.checkDuplicateRegistration({
+          usn: formData.usn,
+          mobile: formData.mobile,
+          email: formData.email
+        });
+
+        if (dupCheck.isDuplicate && dupCheck.existingApplication) {
+          setDuplicateRecord(dupCheck.existingApplication);
+          setDuplicateMatchedFields(dupCheck.matchedFields || []);
+          return;
+        }
+
+        // Duplicate check passed — advance to Step 2 (Photo Upload)
+        setCurrentStep(2);
+      } catch (err: any) {
+        console.error('Duplicate verification error:', err);
+        setCurrentStep(2);
+      } finally {
+        setIsCheckingDuplicate(false);
+      }
     } else if (currentStep === 2 && validateStep2()) {
       setCurrentStep(3);
     } else if (currentStep === 3 && validateStep3()) {
@@ -149,33 +184,70 @@ export const RegistrationModal: React.FC = () => {
       return;
     }
 
-    const newApp = await submitApplication({
-      fullName: formData.fullName.trim(),
-      usn: formData.usn.trim().toUpperCase(),
-      department: 'CSE',
-      section: formData.section,
-      mobile: formData.mobile.trim(),
-      email: formData.email.trim(),
-      photoUrl: formData.photoUrl,
-      preference1: formData.preferences[0],
-      preference2: formData.preferences[1],
-      preferences: formData.preferences,
-    });
+    setIsCheckingDuplicate(true);
+    try {
+      // Re-verify duplicate registration before record creation to prevent race conditions
+      const dupCheck = await dbService.checkDuplicateRegistration({
+        usn: formData.usn,
+        mobile: formData.mobile,
+        email: formData.email
+      });
 
-    setSubmittedAppId(newApp.id);
-    confetti({
-      particleCount: 100,
-      spread: 70,
-      origin: { y: 0.6 }
-    });
+      if (dupCheck.isDuplicate && dupCheck.existingApplication) {
+        setDuplicateRecord(dupCheck.existingApplication);
+        setDuplicateMatchedFields(dupCheck.matchedFields || []);
+        return;
+      }
+
+      const newApp = await submitApplication({
+        fullName: formData.fullName.trim(),
+        usn: formData.usn.trim().toUpperCase(),
+        department: 'CSE',
+        section: formData.section,
+        mobile: formData.mobile.trim(),
+        email: formData.email.trim(),
+        photoUrl: formData.photoUrl,
+        preference1: formData.preferences[0],
+        preference2: formData.preferences[1],
+        preferences: formData.preferences,
+      });
+
+      if (newApp.isDuplicate) {
+        setDuplicateRecord(newApp);
+        setDuplicateMatchedFields(['USN']);
+        return;
+      }
+
+      setSubmittedAppId(newApp.id);
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 }
+      });
+    } catch (err: any) {
+      setErrors({ confirm: err.message || 'Failed to submit application. Please try again.' });
+    } finally {
+      setIsCheckingDuplicate(false);
+    }
   };
 
   const handleClose = () => {
     setIsRegisterModalOpen(false);
     setCurrentStep(1);
     setSubmittedAppId(null);
+    setDuplicateRecord(null);
+    setDuplicateMatchedFields([]);
+    setIsCheckingDuplicate(false);
     setErrors({});
     setPreferenceWarning('');
+  };
+
+  const handleGoToDuplicateStatus = () => {
+    if (duplicateRecord) {
+      setStatusLookupUSN(duplicateRecord.usn);
+      handleClose();
+      setIsStatusModalOpen(true);
+    }
   };
 
   const handleGoToStatus = () => {
@@ -216,8 +288,8 @@ export const RegistrationModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Multi-Step Indicator (Only if not submitted) */}
-        {!submittedAppId && (
+        {/* Multi-Step Indicator (Only if not submitted and not duplicate) */}
+        {!submittedAppId && !duplicateRecord && (
           <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800/80">
             <div className="grid grid-cols-4 gap-2 text-center">
               {[
@@ -331,6 +403,141 @@ export const RegistrationModal: React.FC = () => {
                 <button
                   onClick={handleClose}
                   className="px-6 py-3.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 font-display font-medium text-xs tracking-wider uppercase rounded-xl transition-all cursor-pointer"
+                >
+                  CLOSE
+                </button>
+              </div>
+            </div>
+          ) : duplicateRecord ? (
+            /* PROFESSIONAL ALREADY REGISTERED RESULT SCREEN */
+            <div className="py-4 text-center space-y-6 animate-fade-in">
+              <div className="w-20 h-20 rounded-full bg-cyan-950/40 border-2 border-cyan-400 text-cyan-400 flex items-center justify-center mx-auto shadow-xl shadow-cyan-500/20">
+                <ShieldAlert className="w-10 h-10" />
+              </div>
+
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/80 border border-amber-500/40 text-[10px] font-mono font-bold tracking-widest text-amber-300 uppercase mb-3">
+                  <span>DUPLICATE REGISTRATION PREVENTED</span>
+                </div>
+
+                <h4 className="font-display font-black text-2xl sm:text-3xl text-white tracking-wide uppercase">
+                  ALREADY REGISTERED
+                </h4>
+                <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-md mx-auto leading-relaxed">
+                  An existing volunteer application was found in the database with matching credentials. Each volunteer may only register once.
+                </p>
+
+                {duplicateMatchedFields.length > 0 && (
+                  <div className="mt-2 text-[11px] font-mono text-cyan-400">
+                    MATCHED BY: <span className="font-bold underline uppercase">{duplicateMatchedFields.join(' & ')}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Existing Volunteer Record Card */}
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md mx-auto text-left space-y-4 shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div>
+                    <span className="text-[10px] font-mono uppercase text-slate-400 block">APPLICATION ID</span>
+                    <span className="font-display font-black text-2xl text-cyan-400">
+                      {duplicateRecord.applicationId || duplicateRecord.id}
+                    </span>
+                  </div>
+
+                  {/* Status Badge */}
+                  {duplicateRecord.status === 'APPROVED' ? (
+                    <span className="px-3 py-1 rounded-full text-xs font-bold uppercase bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      APPROVED
+                    </span>
+                  ) : duplicateRecord.status === 'REJECTED' ? (
+                    <span className="px-3 py-1 rounded-full text-xs font-bold uppercase bg-red-950 text-red-400 border border-red-800 flex items-center gap-1.5">
+                      <XCircle className="w-3.5 h-3.5" />
+                      REJECTED
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full text-xs font-bold uppercase bg-amber-950 text-amber-400 border border-amber-800 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 animate-pulse" />
+                      PENDING REVIEW
+                    </span>
+                  )}
+                </div>
+
+                {/* Volunteer Details Grid */}
+                <div className="space-y-2 text-xs">
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                    <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-500 block text-[10px]">FULL NAME</span>
+                      <span className="text-white font-bold">{duplicateRecord.fullName}</span>
+                    </div>
+                    <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-500 block text-[10px]">USN</span>
+                      <span className="text-cyan-300 font-bold">{duplicateRecord.usn}</span>
+                    </div>
+                    <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-500 block text-[10px]">DEPARTMENT / SEC</span>
+                      <span className="text-slate-300 font-bold">{duplicateRecord.department} • Sec {duplicateRecord.section}</span>
+                    </div>
+                    <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-500 block text-[10px]">MOBILE NUMBER</span>
+                      <span className="text-slate-300 font-bold">{duplicateRecord.mobile}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status Specific Details */}
+                {duplicateRecord.status === 'APPROVED' && (
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 text-[11px] font-mono">
+                    <div className="p-2.5 bg-emerald-950/30 border border-emerald-900/50 rounded-lg">
+                      <span className="text-emerald-400/80 block text-[10px]">VOLUNTEER ID</span>
+                      <span className="text-emerald-300 font-bold">{duplicateRecord.volunteerId || 'ASSIGNED'}</span>
+                    </div>
+                    <div className="p-2.5 bg-emerald-950/30 border border-emerald-900/50 rounded-lg">
+                      <span className="text-emerald-400/80 block text-[10px]">ASSIGNED EVENT</span>
+                      <span className="text-emerald-300 font-bold">{duplicateRecord.assignedEvent1 || 'ASSIGNED'}</span>
+                    </div>
+                  </div>
+                )}
+
+                {duplicateRecord.status === 'PENDING' && (
+                  <div className="p-3 bg-amber-950/20 border border-amber-900/40 rounded-xl text-[11px] text-amber-300/90 leading-relaxed font-mono">
+                    ⏳ Application is in queue. Credentials will be released once administrator reviews and allocates your event.
+                  </div>
+                )}
+
+                {duplicateRecord.status === 'REJECTED' && (
+                  <div className="p-3 bg-red-950/20 border border-red-900/40 rounded-xl text-[11px] text-red-300/90 leading-relaxed font-mono">
+                    ⚠️ {duplicateRecord.rejectionReason || 'Application was not accepted for this event cycle.'}
+                  </div>
+                )}
+
+                <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[10px] text-slate-400 leading-relaxed">
+                  🛡️ Single-registration policy enforced. Your original application record is preserved without changes.
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-col sm:flex-row justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleGoToDuplicateStatus}
+                  className="flex items-center justify-center space-x-2 px-6 py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-display font-black text-xs tracking-wider uppercase rounded-xl shadow-lg shadow-cyan-500/25 transition-all cursor-pointer"
+                >
+                  <Search className="w-4 h-4" />
+                  <span>CHECK APPLICATION STATUS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDuplicateRecord(null)}
+                  className="flex items-center justify-center space-x-1.5 px-5 py-3.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 font-display font-bold text-xs tracking-wider uppercase rounded-xl transition-all cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>EDIT DETAILS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="px-5 py-3.5 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-400 hover:text-white font-display font-medium text-xs tracking-wider uppercase rounded-xl transition-all cursor-pointer"
                 >
                   CLOSE
                 </button>
@@ -765,14 +972,15 @@ export const RegistrationModal: React.FC = () => {
 
         </div>
 
-        {/* Modal Bottom Footer Navigation (Only if not submitted) */}
-        {!submittedAppId && (
+        {/* Modal Bottom Footer Navigation (Only if not submitted and not duplicate) */}
+        {!submittedAppId && !duplicateRecord && (
           <div className="p-5 border-t border-slate-800 bg-slate-900/60 flex items-center justify-between">
             {currentStep > 1 ? (
               <button
                 type="button"
                 onClick={() => setCurrentStep(prev => prev - 1)}
-                className="flex items-center space-x-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold rounded-xl transition-colors cursor-pointer"
+                disabled={isCheckingDuplicate}
+                className="flex items-center space-x-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-mono font-bold rounded-xl transition-colors cursor-pointer"
               >
                 <ArrowLeft className="w-4 h-4" />
                 <span>BACK</span>
@@ -785,19 +993,39 @@ export const RegistrationModal: React.FC = () => {
               <button
                 type="button"
                 onClick={handleNext}
-                className="flex items-center space-x-1.5 px-6 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-display font-bold uppercase rounded-xl transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
+                disabled={isCheckingDuplicate}
+                className="flex items-center space-x-1.5 px-6 py-2.5 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-60 text-black text-xs font-display font-bold uppercase rounded-xl transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
               >
-                <span>CONTINUE</span>
-                <ArrowRight className="w-4 h-4" />
+                {isCheckingDuplicate ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-black" />
+                    <span>CHECKING CREDENTIALS...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>CONTINUE</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             ) : (
               <button
                 type="button"
                 onClick={handleSubmit}
-                className="flex items-center space-x-1.5 px-6 py-2.5 bg-gradient-to-r from-cyan-500 via-blue-600 to-violet-600 hover:from-cyan-400 hover:to-violet-500 text-white text-xs font-display font-bold uppercase rounded-xl shadow-lg shadow-cyan-500/30 transition-all cursor-pointer"
+                disabled={isCheckingDuplicate}
+                className="flex items-center space-x-1.5 px-6 py-2.5 bg-gradient-to-r from-cyan-500 via-blue-600 to-violet-600 hover:from-cyan-400 hover:to-violet-500 disabled:opacity-60 text-white text-xs font-display font-bold uppercase rounded-xl shadow-lg shadow-cyan-500/30 transition-all cursor-pointer"
               >
-                <Sparkles className="w-4 h-4" />
-                <span>SUBMIT APPLICATION</span>
+                {isCheckingDuplicate ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>VERIFYING...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>SUBMIT APPLICATION</span>
+                  </>
+                )}
               </button>
             )}
           </div>

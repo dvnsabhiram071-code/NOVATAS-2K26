@@ -40,7 +40,7 @@ interface AppContextType {
   setStatusLookupUSN: (usn: string) => void;
   
   // Actions
-  submitApplication: (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>) => Promise<VolunteerApplication>;
+  submitApplication: (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>) => Promise<VolunteerApplication & { isDuplicate?: boolean }>;
   approveApplication: (id: string, finalEvent?: string, volunteerRole?: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
   rejectApplication: (id: string, reason: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
   deleteApplication: (id: string) => Promise<{ success: boolean; message: string }>;
@@ -130,8 +130,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Submit new application: NEVER generates Volunteer ID, QR, or final assignment
-  const submitApplication = async (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>): Promise<VolunteerApplication> => {
+  // Submit new application: NEVER generates Volunteer ID, QR, or final assignment. Enforces duplicate check.
+  const submitApplication = async (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>): Promise<VolunteerApplication & { isDuplicate?: boolean }> => {
+    // 1. Live duplicate verification against Supabase before ID generation or database write
+    const dupCheck = await dbService.checkDuplicateRegistration({
+      usn: data.usn,
+      mobile: data.mobile,
+      email: data.email
+    });
+
+    if (dupCheck.isDuplicate && dupCheck.existingApplication) {
+      console.warn('Duplicate registration detected. Returning existing application without alteration:', dupCheck.existingApplication.id);
+      return {
+        ...dupCheck.existingApplication,
+        isDuplicate: true
+      };
+    }
+
     const count = applications.length + 490;
     const padded = String(count).padStart(5, '0');
     const newId = `NOV26-${padded}`;
@@ -154,10 +169,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isDeleted: false
     };
 
-    const res = await dbService.saveApplication(newApp);
+    const res = await dbService.saveApplication(newApp, true);
+    if (res.isDuplicate && res.data) {
+      return {
+        ...res.data,
+        isDuplicate: true
+      };
+    }
+
     const finalApp = res.data || newApp;
     setApplications(prev => [finalApp, ...prev.filter(a => a.id !== newId)]);
-    return finalApp;
+    return {
+      ...finalApp,
+      isDuplicate: false
+    };
   };
 
   // Assign Volunteer Events & Role (Pre-approval draft assignment OR post-approval modification)

@@ -41,6 +41,11 @@ CREATE INDEX IF NOT EXISTS idx_applications_status ON public.applications (statu
 CREATE INDEX IF NOT EXISTS idx_applications_volunteer_id ON public.applications (volunteer_id);
 CREATE INDEX IF NOT EXISTS idx_applications_qr_token ON public.applications (qr_token);
 
+-- Unique indexes preventing duplicate volunteer registrations for active applications
+CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_unique_usn ON public.applications (UPPER(TRIM(usn))) WHERE is_deleted = false;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_unique_email ON public.applications (LOWER(TRIM(email))) WHERE is_deleted = false;
+CREATE INDEX IF NOT EXISTS idx_applications_mobile ON public.applications (mobile);
+
 -- 2. EVENTS TABLE
 CREATE TABLE IF NOT EXISTS public.events (
   id TEXT PRIMARY KEY,
