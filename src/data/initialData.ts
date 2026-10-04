@@ -119,7 +119,7 @@ export const INITIAL_APPLICATIONS: VolunteerApplication[] = [
     applicationId: 'NOV26-00492',
     volunteerId: 'NVT26-V00492',
     fullName: 'D V N S ABHIRAM',
-    usn: 'KUB25CSE052',
+    usn: 'KUB25CSE502',
     department: 'CSE',
     section: 'A',
     mobile: '8618842527',

@@ -221,7 +221,7 @@ INSERT INTO public.applications (
 )
 VALUES
   (
-    'NOV26-00492', 'NOV26-00492', 'D V N S ABHIRAM', 'KUB25CSE052', 'CSE', 'A', '8618842527', 'dvnsabhiram071@gmail.com',
+    'NOV26-00492', 'NOV26-00492', 'D V N S ABHIRAM', 'KUB25CSE502', 'CSE', 'A', '8618842527', 'dvnsabhiram071@gmail.com',
     'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=600',
     'Ramp Walk', 'Chess', 'APPROVED', 'Ramp Walk', 'CULTURAL', 'Stage Coordination',
     'NVT26-V00492', 'sec-9842a1', '2026-10-03T10:00:00Z', '2026-10-02T10:00:00Z', FALSE, NULL, FALSE

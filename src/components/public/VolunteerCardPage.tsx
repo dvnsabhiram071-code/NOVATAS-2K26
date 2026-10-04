@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Search, ShieldCheck, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Search, ShieldCheck, Sparkles, Loader2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { DigitalVolunteerCard } from './DigitalVolunteerCard';
+import { dbService } from '../../services/db';
+import { VolunteerApplication } from '../../types';
 
 export const VolunteerCardPage: React.FC<{ 
   initialVolunteerId?: string;
@@ -9,15 +11,47 @@ export const VolunteerCardPage: React.FC<{
 }> = ({ initialVolunteerId, onBackToHome }) => {
   const { applications } = useApp();
   const [searchQuery, setSearchQuery] = useState(initialVolunteerId || 'NVT26-V00492');
+  const [currentVolunteer, setCurrentVolunteer] = useState<VolunteerApplication | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const approvedList = applications.filter(a => !a.isDeleted && a.status === 'APPROVED');
-  
-  // Find matching volunteer
-  const currentVolunteer = approvedList.find(a => 
-    (a.volunteerId && a.volunteerId.toUpperCase() === searchQuery.trim().toUpperCase()) ||
-    (a.usn && a.usn.toUpperCase() === searchQuery.trim().toUpperCase()) ||
-    (a.id && a.id.toUpperCase() === searchQuery.trim().toUpperCase())
-  ) || approvedList[0];
+
+  const fetchLiveVolunteer = async (query: string) => {
+    setIsLoading(true);
+    try {
+      const live = await dbService.fetchApplicationByUSN(query);
+      if (live && live.status === 'APPROVED') {
+        setCurrentVolunteer(live);
+      } else {
+        const found = approvedList.find(a => 
+          (a.volunteerId && a.volunteerId.toUpperCase() === query.trim().toUpperCase()) ||
+          (a.usn && a.usn.toUpperCase() === query.trim().toUpperCase()) ||
+          (a.id && a.id.toUpperCase() === query.trim().toUpperCase())
+        ) || approvedList[0] || null;
+        setCurrentVolunteer(found);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLiveVolunteer(searchQuery);
+  }, [searchQuery]);
+
+  // Synchronize if applications array updates via Supabase Realtime
+  useEffect(() => {
+    if (currentVolunteer) {
+      const match = applications.find(a => a.id === currentVolunteer.id);
+      if (match && (
+        match.assignedEvent1 !== currentVolunteer.assignedEvent1 ||
+        match.volunteerRole !== currentVolunteer.volunteerRole ||
+        match.checkedIn !== currentVolunteer.checkedIn
+      )) {
+        setCurrentVolunteer(match);
+      }
+    }
+  }, [applications]);
 
   return (
     <div className="min-h-screen bg-black text-slate-100 flex flex-col items-center justify-start py-8 px-4 relative overflow-hidden bg-grid-cyber">

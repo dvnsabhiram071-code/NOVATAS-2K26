@@ -112,12 +112,12 @@ export const FAQManagement: React.FC = () => {
     return Object.keys(errs).length === 0;
   };
 
-  const handleSaveFAQ = (e: React.FormEvent) => {
+  const handleSaveFAQ = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
     if (editingFAQ) {
-      updateFAQ(editingFAQ.id, {
+      await updateFAQ(editingFAQ.id, {
         question: formData.question.trim(),
         answer: formData.answer.trim(),
         category: formData.category,
@@ -125,7 +125,7 @@ export const FAQManagement: React.FC = () => {
         displayOrder: Number(formData.displayOrder) || 1
       });
     } else {
-      addFAQ({
+      await addFAQ({
         question: formData.question.trim(),
         answer: formData.answer.trim(),
         category: formData.category,

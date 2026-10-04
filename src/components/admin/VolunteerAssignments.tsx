@@ -41,18 +41,34 @@ export const VolunteerAssignments: React.FC = () => {
     );
   });
 
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+
   const handleOpenIndividualAssign = (vol: VolunteerApplication) => {
     setTargetVolunteer(vol);
     setEvent1Choice(vol.assignedEvent1 || vol.preferences[0] || events[0]?.name || '');
     setEvent2Choice(vol.assignedEvent2 || '');
     setRoleChoice(vol.volunteerRole || 'Event Coordination');
+    setSaveError('');
   };
 
-  const handleSaveIndividualAssign = (e: React.FormEvent) => {
+  const handleSaveIndividualAssign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!targetVolunteer) return;
-    assignVolunteerEvents(targetVolunteer.id, event1Choice, event2Choice || undefined, roleChoice);
-    setTargetVolunteer(null);
+    setIsSaving(true);
+    setSaveError('');
+    try {
+      const res = await assignVolunteerEvents(targetVolunteer.id, event1Choice, event2Choice || undefined, roleChoice);
+      if (res.success) {
+        setTargetVolunteer(null);
+      } else {
+        setSaveError(res.message);
+      }
+    } catch (err: any) {
+      setSaveError(err.message || 'Error saving assignment');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Bulk selection toggles
@@ -70,12 +86,21 @@ export const VolunteerAssignments: React.FC = () => {
     }
   };
 
-  const handleExecuteBulkAssign = () => {
+  const handleExecuteBulkAssign = async () => {
     if (selectedIds.length === 0 || !bulkEventChoice) return;
-    bulkAssign(selectedIds, bulkEventChoice);
-    setBulkSuccessMsg(`Successfully assigned ${selectedIds.length} volunteers to "${bulkEventChoice}"!`);
-    setSelectedIds([]);
-    setTimeout(() => setBulkSuccessMsg(''), 4000);
+    setIsSaving(true);
+    try {
+      const res = await bulkAssign(selectedIds, bulkEventChoice);
+      if (res.success) {
+        setBulkSuccessMsg(res.message);
+        setSelectedIds([]);
+        setTimeout(() => setBulkSuccessMsg(''), 4000);
+      } else {
+        alert(res.message);
+      }
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -378,9 +403,16 @@ export const VolunteerAssignments: React.FC = () => {
                 </select>
               </div>
 
+              {saveError && (
+                <div className="p-3 bg-rose-950/80 border border-rose-500/50 rounded-xl text-rose-300 text-xs font-mono">
+                  ⚠ {saveError}
+                </div>
+              )}
+
               <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setTargetVolunteer(null)}
                   className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-mono rounded-xl"
                 >
@@ -388,9 +420,10 @@ export const VolunteerAssignments: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-display font-bold text-xs uppercase tracking-wider rounded-xl shadow-md shadow-cyan-500/25"
+                  disabled={isSaving}
+                  className="px-5 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-display font-bold text-xs uppercase tracking-wider rounded-xl shadow-md shadow-cyan-500/25 disabled:opacity-50"
                 >
-                  SAVE ASSIGNMENT
+                  {isSaving ? 'SAVING TO SUPABASE...' : 'SAVE ASSIGNMENT'}
                 </button>
               </div>
             </form>

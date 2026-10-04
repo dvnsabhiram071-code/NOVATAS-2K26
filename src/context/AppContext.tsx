@@ -40,35 +40,35 @@ interface AppContextType {
   setStatusLookupUSN: (usn: string) => void;
   
   // Actions
-  submitApplication: (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>) => VolunteerApplication;
-  approveApplication: (id: string, finalEvent?: string, volunteerRole?: string) => boolean;
-  rejectApplication: (id: string, reason: string) => void;
-  deleteApplication: (id: string) => void;
-  assignVolunteerEvents: (id: string, event1: string, event2?: string, role?: string) => void;
-  bulkAssign: (ids: string[], eventName: string) => void;
-  checkInVolunteer: (identifier: string) => { success: boolean; volunteer?: VolunteerApplication; message: string };
+  submitApplication: (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>) => Promise<VolunteerApplication>;
+  approveApplication: (id: string, finalEvent?: string, volunteerRole?: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
+  rejectApplication: (id: string, reason: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
+  deleteApplication: (id: string) => Promise<{ success: boolean; message: string }>;
+  assignVolunteerEvents: (id: string, event1: string, event2?: string, role?: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
+  bulkAssign: (ids: string[], eventName: string) => Promise<{ success: boolean; message: string }>;
+  checkInVolunteer: (identifier: string) => Promise<{ success: boolean; volunteer?: VolunteerApplication; message: string }>;
   
   // Event Management
-  addEvent: (event: Omit<VolunteerEvent, 'id'>) => void;
-  updateEvent: (id: string, data: Partial<VolunteerEvent>) => void;
-  deleteEvent: (id: string) => void;
+  addEvent: (event: Omit<VolunteerEvent, 'id'>) => Promise<{ success: boolean; message: string }>;
+  updateEvent: (id: string, data: Partial<VolunteerEvent>) => Promise<{ success: boolean; message: string }>;
+  deleteEvent: (id: string) => Promise<{ success: boolean; message: string }>;
 
   // Contact Management
-  addContact: (contact: Omit<ContactPerson, 'id' | 'createdAt'>) => void;
-  updateContact: (id: string, data: Partial<ContactPerson>) => void;
-  deleteContact: (id: string) => void;
-  toggleContactStatus: (id: string) => void;
-  reorderContacts: (orderedIds: string[]) => void;
+  addContact: (contact: Omit<ContactPerson, 'id' | 'createdAt'>) => Promise<{ success: boolean; message: string }>;
+  updateContact: (id: string, data: Partial<ContactPerson>) => Promise<{ success: boolean; message: string }>;
+  deleteContact: (id: string) => Promise<{ success: boolean; message: string }>;
+  toggleContactStatus: (id: string) => Promise<void>;
+  reorderContacts: (orderedIds: string[]) => Promise<void>;
 
   // FAQ Management
-  addFAQ: (faq: Omit<FAQItem, 'id' | 'createdAt'>) => void;
-  updateFAQ: (id: string, data: Partial<FAQItem>) => void;
-  deleteFAQ: (id: string) => void;
-  toggleFAQStatus: (id: string) => void;
-  reorderFAQs: (orderedIds: string[]) => void;
+  addFAQ: (faq: Omit<FAQItem, 'id' | 'createdAt'>) => Promise<{ success: boolean; message: string }>;
+  updateFAQ: (id: string, data: Partial<FAQItem>) => Promise<{ success: boolean; message: string }>;
+  deleteFAQ: (id: string) => Promise<{ success: boolean; message: string }>;
+  toggleFAQStatus: (id: string) => Promise<void>;
+  reorderFAQs: (orderedIds: string[]) => Promise<void>;
   
   // Settings & Cloud Database
-  updateSettings: (newSettings: Partial<AdminSettings>) => void;
+  updateSettings: (newSettings: Partial<AdminSettings>) => Promise<{ success: boolean; message: string }>;
   resetDemoData: () => void;
   saveCloudConfig: (url: string, key: string) => Promise<{ success: boolean; message: string }>;
   getCloudConfig: () => { url: string; key: string; source: 'env' | 'storage' | 'none' };
@@ -131,7 +131,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // Submit new application: NEVER generates Volunteer ID, QR, or final assignment
-  const submitApplication = (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>): VolunteerApplication => {
+  const submitApplication = async (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>): Promise<VolunteerApplication> => {
     const count = applications.length + 490;
     const padded = String(count).padStart(5, '0');
     const newId = `NOV26-${padded}`;
@@ -154,18 +154,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isDeleted: false
     };
 
-    setApplications(prev => [newApp, ...prev]);
-    // Persist to database
-    dbService.saveApplication(newApp);
-
-    return newApp;
+    const res = await dbService.saveApplication(newApp);
+    const finalApp = res.data || newApp;
+    setApplications(prev => [finalApp, ...prev.filter(a => a.id !== newId)]);
+    return finalApp;
   };
 
   // Assign Volunteer Events & Role (Pre-approval draft assignment OR post-approval modification)
-  const assignVolunteerEvents = (id: string, event1: string, event2?: string, role?: string) => {
+  const assignVolunteerEvents = async (id: string, event1: string, event2?: string, role?: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
     const matchedEvt = events.find(e => e.name.toLowerCase() === event1.toLowerCase());
-    const target = applications.find(a => a.id === id);
-    if (!target) return;
+    let target = applications.find(a => a.id === id);
+    if (!target) {
+      target = await dbService.fetchApplicationById(id) || undefined;
+    }
+    if (!target) {
+      return { success: false, message: `Application "${id}" not found.` };
+    }
 
     const updated: VolunteerApplication = {
       ...target,
@@ -176,23 +180,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString()
     };
 
-    setApplications(prev => prev.map(app => app.id === id ? updated : app));
-    dbService.saveApplication(updated);
-
-    adminAuthService.logAudit('EVENT_ASSIGNED', 'APPLICATION', id, `Assigned to ${event1}${role ? ` (${role})` : ''}`);
+    const res = await dbService.saveApplication(updated);
+    if (res.success && res.data) {
+      setApplications(prev => prev.map(app => app.id === id ? res.data! : app));
+      adminAuthService.logAudit('EVENT_ASSIGNED', 'APPLICATION', id, `Assigned to ${event1}${role ? ` (${role})` : ''}`);
+      return { success: true, message: 'Saved and verified in Supabase database.', data: res.data };
+    } else {
+      console.error('Failed to assign volunteer events:', res.message);
+      return { success: false, message: res.message || 'Database error occurred while assigning.' };
+    }
   };
 
   // Approve Application: Strict verification & generation of Volunteer ID + QR
-  const approveApplication = (id: string, finalEvent?: string, volunteerRole?: string): boolean => {
-    const target = applications.find(a => a.id === id && !a.isDeleted);
-    if (!target) return false;
+  const approveApplication = async (id: string, finalEvent?: string, volunteerRole?: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
+    let target = applications.find(a => a.id === id && !a.isDeleted);
+    if (!target) {
+      target = await dbService.fetchApplicationById(id) || undefined;
+    }
+    if (!target) return { success: false, message: 'Volunteer application not found.' };
 
     const eventToAssign = finalEvent || target.assignedEvent1;
     const roleToAssign = volunteerRole || target.volunteerRole;
 
     if (!eventToAssign || !roleToAssign) {
-      console.warn('Cannot approve application: Final event and Volunteer role must both be assigned first.');
-      return false;
+      return { success: false, message: 'Cannot approve application: Final event and Volunteer role must both be assigned first.' };
     }
 
     const numPart = target.id.replace('NOV26-', '').padStart(5, '0');
@@ -215,18 +226,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       rejectionReason: undefined
     };
 
-    setApplications(prev => prev.map(app => app.id === id ? updated : app));
-    dbService.saveApplication(updated);
-
-    adminAuthService.logAudit('APPLICATION_APPROVED', 'APPLICATION', id, `Approved and assigned to ${eventToAssign}`);
-
-    return true;
+    const res = await dbService.saveApplication(updated);
+    if (res.success && res.data) {
+      setApplications(prev => prev.map(app => app.id === id ? res.data! : app));
+      adminAuthService.logAudit('APPLICATION_APPROVED', 'APPLICATION', id, `Approved and assigned to ${eventToAssign}`);
+      return { success: true, message: 'Application approved and saved to database.', data: res.data };
+    } else {
+      return { success: false, message: res.message || 'Database save error during approval.' };
+    }
   };
 
   // Reject Application: No Volunteer ID, No QR, No Volunteer Card
-  const rejectApplication = (id: string, reason: string) => {
-    const target = applications.find(a => a.id === id);
-    if (!target) return;
+  const rejectApplication = async (id: string, reason: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
+    let target = applications.find(a => a.id === id);
+    if (!target) {
+      target = await dbService.fetchApplicationById(id) || undefined;
+    }
+    if (!target) return { success: false, message: 'Application not found.' };
 
     const updated: VolunteerApplication = {
       ...target,
@@ -237,54 +253,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString()
     };
 
-    setApplications(prev => prev.map(app => app.id === id ? updated : app));
-    dbService.saveApplication(updated);
-
-    adminAuthService.logAudit('APPLICATION_REJECTED', 'APPLICATION', id, `Reason: ${reason}`);
+    const res = await dbService.saveApplication(updated);
+    if (res.success && res.data) {
+      setApplications(prev => prev.map(app => app.id === id ? res.data! : app));
+      adminAuthService.logAudit('APPLICATION_REJECTED', 'APPLICATION', id, `Reason: ${reason}`);
+      return { success: true, message: 'Application rejected in database.', data: res.data };
+    } else {
+      return { success: false, message: res.message || 'Database error during rejection.' };
+    }
   };
 
   // Soft Delete Application
-  const deleteApplication = (id: string) => {
-    setApplications(prev => prev.map(app => {
-      if (app.id !== id) return app;
-      return { 
-        ...app, 
-        isDeleted: true, 
-        updatedAt: new Date().toISOString()
-      };
-    }));
-    dbService.deleteApplication(id);
-    adminAuthService.logAudit('APPLICATION_DELETED', 'APPLICATION', id, 'Soft-deleted application');
+  const deleteApplication = async (id: string): Promise<{ success: boolean; message: string }> => {
+    const res = await dbService.deleteApplication(id);
+    if (res.success) {
+      setApplications(prev => prev.map(app => {
+        if (app.id !== id) return app;
+        return { 
+          ...app, 
+          isDeleted: true, 
+          updatedAt: new Date().toISOString() 
+        };
+      }));
+      adminAuthService.logAudit('APPLICATION_DELETED', 'APPLICATION', id, 'Soft-deleted application');
+    }
+    return res;
   };
 
   // Bulk Assign
-  const bulkAssign = (ids: string[], eventName: string) => {
+  const bulkAssign = async (ids: string[], eventName: string): Promise<{ success: boolean; message: string }> => {
     const matchedEvt = events.find(e => e.name.toLowerCase() === eventName.toLowerCase());
-    setApplications(prev => prev.map(app => {
-      if (!ids.includes(app.id)) return app;
+    let failedCount = 0;
+    const updatedApps: VolunteerApplication[] = [];
+
+    for (const id of ids) {
+      const target = applications.find(a => a.id === id);
+      if (!target) continue;
       const updated: VolunteerApplication = {
-        ...app,
+        ...target,
         assignedEvent1: eventName,
-        assignedCategory: matchedEvt ? matchedEvt.category : app.assignedCategory,
+        assignedCategory: matchedEvt ? matchedEvt.category : target.assignedCategory,
         updatedAt: new Date().toISOString()
       };
-      dbService.saveApplication(updated);
-      return updated;
-    }));
-    adminAuthService.logAudit('BULK_ASSIGNED', 'APPLICATION', ids.join(','), `Bulk assigned to ${eventName}`);
+      const res = await dbService.saveApplication(updated);
+      if (res.success && res.data) {
+        updatedApps.push(res.data);
+      } else {
+        failedCount++;
+      }
+    }
+
+    if (updatedApps.length > 0) {
+      setApplications(prev => prev.map(app => {
+        const found = updatedApps.find(u => u.id === app.id);
+        return found || app;
+      }));
+      adminAuthService.logAudit('BULK_ASSIGNED', 'APPLICATION', ids.join(','), `Bulk assigned to ${eventName}`);
+    }
+
+    return {
+      success: failedCount === 0,
+      message: failedCount === 0 ? `Successfully assigned ${updatedApps.length} volunteers.` : `Assigned ${updatedApps.length}, but ${failedCount} failed to save.`
+    };
   };
 
   // QR or ID Check-in
-  const checkInVolunteer = (identifier: string): { success: boolean; volunteer?: VolunteerApplication; message: string } => {
+  const checkInVolunteer = async (identifier: string): Promise<{ success: boolean; volunteer?: VolunteerApplication; message: string }> => {
     const cleanId = identifier.trim().toUpperCase();
     
-    const found = applications.find(a => 
-      !a.isDeleted && (
-        (a.volunteerId && a.volunteerId.toUpperCase() === cleanId) ||
-        (a.usn && a.usn.toUpperCase() === cleanId) ||
-        (a.id && a.id.toUpperCase() === cleanId)
-      )
-    );
+    // Live direct query against Supabase
+    let found = await dbService.fetchApplicationByUSN(cleanId);
+    if (!found) {
+      found = applications.find(a => 
+        !a.isDeleted && (
+          (a.volunteerId && a.volunteerId.toUpperCase() === cleanId) ||
+          (a.usn && a.usn.toUpperCase() === cleanId) ||
+          (a.id && a.id.toUpperCase() === cleanId)
+        )
+      ) || null;
+    }
 
     if (!found) {
       return { success: false, message: `No volunteer found matching "${identifier}".` };
@@ -310,47 +357,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated: VolunteerApplication = {
       ...found,
       checkedIn: true,
-      checkedInAt: timeNow
+      checkedInAt: new Date().toISOString()
     };
 
-    setApplications(prev => prev.map(a => a.id === found.id ? updated : a));
-    dbService.saveApplication(updated);
-    adminAuthService.logAudit('CHECK_IN_RECORDED', 'VOLUNTEER', found.id, `Checked in at ${timeNow}`);
-
-    return {
-      success: true,
-      volunteer: updated,
-      message: `Volunteer ${found.fullName} (${found.volunteerId}) successfully accredited and checked in!`
-    };
+    const res = await dbService.saveApplication(updated);
+    if (res.success && res.data) {
+      setApplications(prev => prev.map(a => a.id === found!.id ? res.data! : a));
+      adminAuthService.logAudit('CHECK_IN_RECORDED', 'VOLUNTEER', found.id, `Checked in at ${timeNow}`);
+      return {
+        success: true,
+        volunteer: res.data,
+        message: `Volunteer ${found.fullName} (${found.volunteerId}) successfully accredited and checked in!`
+      };
+    } else {
+      return {
+        success: false,
+        message: `Failed to save check-in: ${res.message}`
+      };
+    }
   };
 
   // Event Management
-  const addEvent = (eventData: Omit<VolunteerEvent, 'id'>) => {
+  const addEvent = async (eventData: Omit<VolunteerEvent, 'id'>): Promise<{ success: boolean; message: string }> => {
     const id = `evt-${eventData.name.toLowerCase().replace(/\s+/g, '')}-${Date.now().toString().slice(-4)}`;
     const newEvent: VolunteerEvent = { ...eventData, id };
-    setEvents(prev => [...prev, newEvent]);
-    dbService.saveEvent(newEvent);
-    adminAuthService.logAudit('EVENT_CREATED', 'EVENT', id, newEvent.name);
+    const res = await dbService.saveEvent(newEvent);
+    if (res.success) {
+      setEvents(prev => [...prev, newEvent]);
+      adminAuthService.logAudit('EVENT_CREATED', 'EVENT', id, newEvent.name);
+    }
+    return res;
   };
 
-  const updateEvent = (id: string, data: Partial<VolunteerEvent>) => {
-    setEvents(prev => prev.map(evt => {
-      if (evt.id !== id) return evt;
-      const updated: VolunteerEvent = { ...evt, ...data };
-      dbService.saveEvent(updated);
-      return updated;
-    }));
-    adminAuthService.logAudit('EVENT_UPDATED', 'EVENT', id, 'Updated event details');
+  const updateEvent = async (id: string, data: Partial<VolunteerEvent>): Promise<{ success: boolean; message: string }> => {
+    const existing = events.find(e => e.id === id);
+    if (!existing) return { success: false, message: 'Event not found' };
+    const updated: VolunteerEvent = { ...existing, ...data };
+    const res = await dbService.saveEvent(updated);
+    if (res.success) {
+      setEvents(prev => prev.map(evt => evt.id === id ? updated : evt));
+      adminAuthService.logAudit('EVENT_UPDATED', 'EVENT', id, 'Updated event details');
+    }
+    return res;
   };
 
-  const deleteEvent = (id: string) => {
-    setEvents(prev => prev.filter(evt => evt.id !== id));
-    dbService.deleteEvent(id);
-    adminAuthService.logAudit('EVENT_DELETED', 'EVENT', id, 'Deleted event');
+  const deleteEvent = async (id: string): Promise<{ success: boolean; message: string }> => {
+    const res = await dbService.deleteEvent(id);
+    if (res.success) {
+      setEvents(prev => prev.filter(evt => evt.id !== id));
+      adminAuthService.logAudit('EVENT_DELETED', 'EVENT', id, 'Deleted event');
+    }
+    return res;
   };
 
   // Contact Management
-  const addContact = (contactData: Omit<ContactPerson, 'id' | 'createdAt'>) => {
+  const addContact = async (contactData: Omit<ContactPerson, 'id' | 'createdAt'>): Promise<{ success: boolean; message: string }> => {
     const id = `cnt-${Date.now().toString(36)}`;
     const newContact: ContactPerson = {
       ...contactData,
@@ -358,56 +419,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    setContacts(prev => [...prev, newContact]);
-    dbService.saveContact(newContact);
-    adminAuthService.logAudit('CONTACT_CREATED', 'CONTACT', id, newContact.name);
+    const res = await dbService.saveContact(newContact);
+    if (res.success) {
+      setContacts(prev => [...prev, newContact]);
+      adminAuthService.logAudit('CONTACT_CREATED', 'CONTACT', id, newContact.name);
+    }
+    return res;
   };
 
-  const updateContact = (id: string, data: Partial<ContactPerson>) => {
-    setContacts(prev => prev.map(c => {
-      if (c.id !== id) return c;
-      const updated: ContactPerson = { ...c, ...data, updatedAt: new Date().toISOString() };
-      dbService.saveContact(updated);
-      return updated;
-    }));
-    adminAuthService.logAudit('CONTACT_UPDATED', 'CONTACT', id, 'Updated contact');
+  const updateContact = async (id: string, data: Partial<ContactPerson>): Promise<{ success: boolean; message: string }> => {
+    const existing = contacts.find(c => c.id === id);
+    if (!existing) return { success: false, message: 'Contact not found' };
+    const updated: ContactPerson = { ...existing, ...data, updatedAt: new Date().toISOString() };
+    const res = await dbService.saveContact(updated);
+    if (res.success) {
+      setContacts(prev => prev.map(c => c.id === id ? updated : c));
+      adminAuthService.logAudit('CONTACT_UPDATED', 'CONTACT', id, 'Updated contact');
+    }
+    return res;
   };
 
-  const deleteContact = (id: string) => {
-    setContacts(prev => prev.filter(c => c.id !== id));
-    dbService.deleteContact(id);
-    adminAuthService.logAudit('CONTACT_DELETED', 'CONTACT', id, 'Deleted contact');
+  const deleteContact = async (id: string): Promise<{ success: boolean; message: string }> => {
+    const res = await dbService.deleteContact(id);
+    if (res.success) {
+      setContacts(prev => prev.filter(c => c.id !== id));
+      adminAuthService.logAudit('CONTACT_DELETED', 'CONTACT', id, 'Deleted contact');
+    }
+    return res;
   };
 
-  const toggleContactStatus = (id: string) => {
-    setContacts(prev => prev.map(c => {
-      if (c.id !== id) return c;
-      const updated: ContactPerson = { 
-        ...c, 
-        status: c.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', 
-        updatedAt: new Date().toISOString() 
-      };
-      dbService.saveContact(updated);
-      return updated;
-    }));
+  const toggleContactStatus = async (id: string): Promise<void> => {
+    const target = contacts.find(c => c.id === id);
+    if (!target) return;
+    const updated: ContactPerson = { 
+      ...target, 
+      status: target.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', 
+      updatedAt: new Date().toISOString() 
+    };
+    const res = await dbService.saveContact(updated);
+    if (res.success) {
+      setContacts(prev => prev.map(c => c.id === id ? updated : c));
+    }
   };
 
-  const reorderContacts = (orderedIds: string[]) => {
-    setContacts(prev => {
-      return prev.map(c => {
-        const idx = orderedIds.indexOf(c.id);
-        if (idx !== -1) {
-          const updated = { ...c, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
-          dbService.saveContact(updated);
-          return updated;
-        }
-        return c;
-      });
+  const reorderContacts = async (orderedIds: string[]): Promise<void> => {
+    const updatedList = contacts.map(c => {
+      const idx = orderedIds.indexOf(c.id);
+      if (idx !== -1) {
+        return { ...c, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
+      }
+      return c;
     });
+    setContacts(updatedList);
+    for (const c of updatedList) {
+      await dbService.saveContact(c);
+    }
   };
 
   // FAQ Management
-  const addFAQ = (faqData: Omit<FAQItem, 'id' | 'createdAt'>) => {
+  const addFAQ = async (faqData: Omit<FAQItem, 'id' | 'createdAt'>): Promise<{ success: boolean; message: string }> => {
     const id = `faq-${Date.now().toString(36)}`;
     const newFAQ: FAQItem = {
       ...faqData,
@@ -415,62 +485,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    setFaqs(prev => [...prev, newFAQ]);
-    dbService.saveFaq(newFAQ);
-    adminAuthService.logAudit('FAQ_CREATED', 'FAQ', id, newFAQ.question);
+    const res = await dbService.saveFaq(newFAQ);
+    if (res.success) {
+      setFaqs(prev => [...prev, newFAQ]);
+      adminAuthService.logAudit('FAQ_CREATED', 'FAQ', id, newFAQ.question);
+    }
+    return res;
   };
 
-  const updateFAQ = (id: string, data: Partial<FAQItem>) => {
-    setFaqs(prev => prev.map(f => {
-      if (f.id !== id) return f;
-      const updated: FAQItem = { ...f, ...data, updatedAt: new Date().toISOString() };
-      dbService.saveFaq(updated);
-      return updated;
-    }));
-    adminAuthService.logAudit('FAQ_UPDATED', 'FAQ', id, 'Updated FAQ');
+  const updateFAQ = async (id: string, data: Partial<FAQItem>): Promise<{ success: boolean; message: string }> => {
+    const existing = faqs.find(f => f.id === id);
+    if (!existing) return { success: false, message: 'FAQ not found' };
+    const updated: FAQItem = { ...existing, ...data, updatedAt: new Date().toISOString() };
+    const res = await dbService.saveFaq(updated);
+    if (res.success) {
+      setFaqs(prev => prev.map(f => f.id === id ? updated : f));
+      adminAuthService.logAudit('FAQ_UPDATED', 'FAQ', id, 'Updated FAQ');
+    }
+    return res;
   };
 
-  const deleteFAQ = (id: string) => {
-    setFaqs(prev => prev.filter(f => f.id !== id));
-    dbService.deleteFaq(id);
-    adminAuthService.logAudit('FAQ_DELETED', 'FAQ', id, 'Deleted FAQ');
+  const deleteFAQ = async (id: string): Promise<{ success: boolean; message: string }> => {
+    const res = await dbService.deleteFaq(id);
+    if (res.success) {
+      setFaqs(prev => prev.filter(f => f.id !== id));
+      adminAuthService.logAudit('FAQ_DELETED', 'FAQ', id, 'Deleted FAQ');
+    }
+    return res;
   };
 
-  const toggleFAQStatus = (id: string) => {
-    setFaqs(prev => prev.map(f => {
-      if (f.id !== id) return f;
-      const updated: FAQItem = { 
-        ...f, 
-        status: f.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', 
-        updatedAt: new Date().toISOString() 
-      };
-      dbService.saveFaq(updated);
-      return updated;
-    }));
+  const toggleFAQStatus = async (id: string): Promise<void> => {
+    const target = faqs.find(f => f.id === id);
+    if (!target) return;
+    const updated: FAQItem = { 
+      ...target, 
+      status: target.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', 
+      updatedAt: new Date().toISOString() 
+    };
+    const res = await dbService.saveFaq(updated);
+    if (res.success) {
+      setFaqs(prev => prev.map(f => f.id === id ? updated : f));
+    }
   };
 
-  const reorderFAQs = (orderedIds: string[]) => {
-    setFaqs(prev => {
-      return prev.map(f => {
-        const idx = orderedIds.indexOf(f.id);
-        if (idx !== -1) {
-          const updated = { ...f, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
-          dbService.saveFaq(updated);
-          return updated;
-        }
-        return f;
-      });
+  const reorderFAQs = async (orderedIds: string[]): Promise<void> => {
+    const updatedList = faqs.map(f => {
+      const idx = orderedIds.indexOf(f.id);
+      if (idx !== -1) {
+        return { ...f, displayOrder: idx + 1, updatedAt: new Date().toISOString() };
+      }
+      return f;
     });
+    setFaqs(updatedList);
+    for (const f of updatedList) {
+      await dbService.saveFaq(f);
+    }
   };
 
   // Settings
-  const updateSettings = (newSettings: Partial<AdminSettings>) => {
-    setSettings(prev => {
-      const updated = { ...prev, ...newSettings };
-      dbService.saveSettings(updated);
-      return updated;
-    });
-    adminAuthService.logAudit('SETTINGS_UPDATED', 'SETTINGS', 'singleton', 'Updated portal settings');
+  const updateSettings = async (newSettings: Partial<AdminSettings>): Promise<{ success: boolean; message: string }> => {
+    const updated = { ...settings, ...newSettings };
+    const res = await dbService.saveSettings(updated);
+    if (res.success) {
+      setSettings(updated);
+      adminAuthService.logAudit('SETTINGS_UPDATED', 'SETTINGS', 'singleton', 'Updated portal settings');
+    }
+    return res;
   };
 
   const resetDemoData = () => {

@@ -71,12 +71,12 @@ export const QRCheckIn: React.FC = () => {
     return text;
   };
 
-  const handleVerify = (codeToTest?: string) => {
+  const handleVerify = async (codeToTest?: string) => {
     const raw = codeToTest || inputCode;
     if (!raw.trim()) return;
 
     const parsedIdentifier = extractIdFromScannedText(raw);
-    const res = checkInVolunteer(parsedIdentifier);
+    const res = await checkInVolunteer(parsedIdentifier);
     setVerificationResult(res);
 
     if (res.success) {

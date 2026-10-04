@@ -117,12 +117,12 @@ export const ContactManagement: React.FC = () => {
     return Object.keys(errs).length === 0;
   };
 
-  const handleSaveContact = (e: React.FormEvent) => {
+  const handleSaveContact = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
     if (editingContact) {
-      updateContact(editingContact.id, {
+      await updateContact(editingContact.id, {
         name: formData.name.trim(),
         email: formData.email.trim(),
         mobile: formData.mobile.trim(),
@@ -132,7 +132,7 @@ export const ContactManagement: React.FC = () => {
         displayOrder: Number(formData.displayOrder) || 1
       });
     } else {
-      addContact({
+      await addContact({
         name: formData.name.trim(),
         email: formData.email.trim(),
         mobile: formData.mobile.trim(),

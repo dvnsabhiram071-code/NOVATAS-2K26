@@ -53,14 +53,14 @@ export const EventManagement: React.FC = () => {
     setIsAddModalOpen(true);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim()) return;
 
     if (editingEvent) {
-      updateEvent(editingEvent.id, formData);
+      await updateEvent(editingEvent.id, formData);
     } else {
-      addEvent(formData);
+      await addEvent(formData);
     }
     setIsAddModalOpen(false);
   };

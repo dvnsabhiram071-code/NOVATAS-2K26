@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle2, 
   ShieldCheck, 
@@ -6,30 +6,56 @@ import {
   Calendar, 
   Users, 
   GraduationCap, 
-  CreditCard,
-  QrCode,
-  AlertCircle,
-  Crown
+  CreditCard, 
+  QrCode, 
+  AlertCircle, 
+  Crown,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { dbService } from '../../services/db';
+import { VolunteerApplication } from '../../types';
 
 export const VerifyVolunteerPage: React.FC<{ 
-  tokenQuery: string;
+  tokenQuery: string; 
   onBackToHome: () => void;
 }> = ({ tokenQuery, onBackToHome }) => {
-  const { applications, checkInVolunteer } = useApp();
+  const { applications } = useApp();
+  const [liveVolunteer, setLiveVolunteer] = useState<VolunteerApplication | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Find volunteer by matching ID or qrToken within tokenQuery
   const cleanQuery = tokenQuery.toUpperCase().replace('/VERIFY/', '').replace('#/VERIFY/', '').trim();
-  
-  const foundVolunteer = applications.find(a => {
-    if (a.isDeleted) return false;
-    const vId = (a.volunteerId || '').toUpperCase();
-    const token = (a.qrToken || '').toUpperCase();
-    const usn = a.usn.toUpperCase();
-    return (vId && cleanQuery.includes(vId)) || (token && cleanQuery.includes(token)) || cleanQuery.includes(usn);
-  });
 
+  useEffect(() => {
+    let isMounted = true;
+    const verifyBadge = async () => {
+      setIsLoading(true);
+      try {
+        const live = await dbService.verifyVolunteerToken(cleanQuery);
+        if (isMounted) {
+          if (live) {
+            setLiveVolunteer(live);
+          } else {
+            const fallback = applications.find(a => {
+              if (a.isDeleted) return false;
+              const vId = (a.volunteerId || '').toUpperCase();
+              const token = (a.qrToken || '').toUpperCase();
+              const usn = a.usn.toUpperCase();
+              return (vId && cleanQuery.includes(vId)) || (token && cleanQuery.includes(token)) || cleanQuery.includes(usn);
+            });
+            setLiveVolunteer(fallback || null);
+          }
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+    verifyBadge();
+    return () => { isMounted = false; };
+  }, [tokenQuery]);
+
+  const foundVolunteer = liveVolunteer;
   const isApproved = foundVolunteer && foundVolunteer.status === 'APPROVED' && !!foundVolunteer.volunteerId;
 
   return (
@@ -52,8 +78,12 @@ export const VerifyVolunteerPage: React.FC<{
         {/* Verification Card */}
         <div className="bg-gradient-to-b from-slate-900 via-slate-950 to-black rounded-3xl border-2 border-emerald-500/50 p-6 sm:p-8 shadow-2xl shadow-emerald-500/20 text-center space-y-6">
           
-          {/* Header Status */}
-          {isApproved ? (
+          {isLoading ? (
+            <div className="py-12 space-y-3">
+              <Loader2 className="w-10 h-10 text-cyan-400 animate-spin mx-auto" />
+              <p className="text-xs text-slate-400 font-mono">VERIFYING BADGE WITH CLOUD DATABASE...</p>
+            </div>
+          ) : isApproved ? (
             <div className="space-y-3">
               <div className="w-20 h-20 rounded-full bg-emerald-500/20 border-2 border-emerald-400 text-emerald-400 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/30">
                 <CheckCircle2 className="w-10 h-10 stroke-[2.5]" />
@@ -87,7 +117,7 @@ export const VerifyVolunteerPage: React.FC<{
           )}
 
           {/* Volunteer Credentials Box */}
-          {foundVolunteer && isApproved && (
+          {!isLoading && foundVolunteer && isApproved && (
             <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 text-left space-y-4">
               <div className="flex items-center space-x-4 pb-4 border-b border-slate-800">
                 <img 

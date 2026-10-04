@@ -19,6 +19,7 @@ import { useApp } from '../../context/AppContext';
 import { VolunteerApplication } from '../../types';
 import { DigitalVolunteerCard } from './DigitalVolunteerCard';
 import { generateVolunteerQRCode } from '../../utils/qrGenerator';
+import { dbService } from '../../services/db';
 
 export const StatusCheckModal: React.FC = () => {
   const { 
@@ -32,6 +33,7 @@ export const StatusCheckModal: React.FC = () => {
 
   const [inputUSN, setInputUSN] = useState<string>('');
   const [searched, setSearched] = useState<boolean>(false);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
   const [result, setResult] = useState<VolunteerApplication | null>(null);
   const [showLargeQRModal, setShowLargeQRModal] = useState<boolean>(false);
   const [showCardModal, setShowCardModal] = useState<boolean>(false);
@@ -44,39 +46,71 @@ export const StatusCheckModal: React.FC = () => {
     }
   }, [statusLookupUSN, isStatusModalOpen]);
 
+  // Synchronize open result if applications array changes in real time
+  useEffect(() => {
+    if (result) {
+      const match = applications.find(a => 
+        a.id === result.id || 
+        a.usn.toUpperCase() === result.usn.toUpperCase() ||
+        (a.volunteerId && a.volunteerId === result.volunteerId)
+      );
+      if (match && (
+        match.assignedEvent1 !== result.assignedEvent1 ||
+        match.assignedEvent2 !== result.assignedEvent2 ||
+        match.volunteerRole !== result.volunteerRole ||
+        match.status !== result.status ||
+        match.checkedIn !== result.checkedIn
+      )) {
+        setResult(match);
+      }
+    }
+  }, [applications]);
+
   if (!isStatusModalOpen) return null;
 
-  const handleSearch = (usnToSearch?: string) => {
+  const handleSearch = async (usnToSearch?: string) => {
     const query = (usnToSearch || inputUSN).trim().toUpperCase();
     if (!query) return;
 
     setSearched(true);
-    const match = applications.find(
-      app => !app.isDeleted && (
-        app.usn.toUpperCase() === query || 
-        app.id.toUpperCase() === query ||
-        (app.volunteerId && app.volunteerId.toUpperCase() === query)
-      )
-    );
-    setResult(match || null);
+    setIsSearching(true);
+    setResult(null);
 
-    // CRITICAL QR RULE: ONLY generate QR if status is APPROVED
-    if (match && match.status === 'APPROVED' && match.volunteerId && match.qrToken) {
-      generateVolunteerQRCode({
-        system: 'NOVATAS-2K26',
-        volunteerId: match.volunteerId,
-        fullName: match.fullName,
-        usn: match.usn,
-        department: match.department,
-        section: match.section,
-        assignedEvent1: match.assignedEvent1 || 'Assigned Event',
-        volunteerRole: match.volunteerRole || 'Event Coordination',
-        status: match.status,
-        qrToken: match.qrToken,
-        verifiedAt: new Date().toISOString()
-      }).then(url => setQrCodeDataUrl(url));
-    } else {
-      setQrCodeDataUrl('');
+    try {
+      // 1. Direct LIVE fetch from Supabase (Zero Caching)
+      const liveMatch = await dbService.fetchApplicationByUSN(query);
+      const match = liveMatch || applications.find(
+        app => !app.isDeleted && (
+          app.usn.toUpperCase() === query || 
+          app.id.toUpperCase() === query ||
+          (app.volunteerId && app.volunteerId.toUpperCase() === query)
+        )
+      ) || null;
+
+      setResult(match);
+
+      // CRITICAL QR RULE: ONLY generate QR if status is APPROVED
+      if (match && match.status === 'APPROVED' && match.volunteerId && match.qrToken) {
+        generateVolunteerQRCode({
+          system: 'NOVATAS-2K26',
+          volunteerId: match.volunteerId,
+          fullName: match.fullName,
+          usn: match.usn,
+          department: match.department,
+          section: match.section,
+          assignedEvent1: match.assignedEvent1 || 'Assigned Event',
+          volunteerRole: match.volunteerRole || 'Event Coordination',
+          status: match.status,
+          qrToken: match.qrToken,
+          verifiedAt: new Date().toISOString()
+        }).then(url => setQrCodeDataUrl(url));
+      } else {
+        setQrCodeDataUrl('');
+      }
+    } catch (err) {
+      console.error('Error fetching live application status:', err);
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -84,6 +118,7 @@ export const StatusCheckModal: React.FC = () => {
     setIsStatusModalOpen(false);
     setStatusLookupUSN('');
     setSearched(false);
+    setIsSearching(false);
     setResult(null);
     setShowLargeQRModal(false);
     setShowCardModal(false);
@@ -135,19 +170,27 @@ export const StatusCheckModal: React.FC = () => {
             </div>
             <button
               onClick={() => handleSearch()}
-              className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-display font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
+              disabled={isSearching}
+              className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-display font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-cyan-500/20 cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-1.5"
             >
-              CHECK STATUS
+              {isSearching ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                  <span>CHECKING...</span>
+                </>
+              ) : (
+                <span>CHECK STATUS</span>
+              )}
             </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 mt-2 font-mono">
             <span>Quick Test:</span>
             <button 
-              onClick={() => { setInputUSN('KUB25CSE052'); handleSearch('KUB25CSE052'); }}
+              onClick={() => { setInputUSN('KUB25CSE502'); handleSearch('KUB25CSE502'); }}
               className="text-cyan-400 hover:underline font-bold"
             >
-              KUB25CSE052 (Abhiram - Approved)
+              KUB25CSE502 (Abhiram - Approved)
             </button>
             <span>•</span>
             <button 

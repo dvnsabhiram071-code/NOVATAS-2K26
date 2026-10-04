@@ -142,14 +142,14 @@ export const RegistrationModal: React.FC = () => {
   };
 
   // Final Form Submission
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.confirmCorrect) {
       setErrors({ confirm: 'Please confirm that all details provided are accurate.' });
       return;
     }
 
-    const newApp = submitApplication({
+    const newApp = await submitApplication({
       fullName: formData.fullName.trim(),
       usn: formData.usn.trim().toUpperCase(),
       department: 'CSE',

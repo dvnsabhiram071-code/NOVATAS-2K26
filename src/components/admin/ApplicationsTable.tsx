@@ -119,22 +119,19 @@ export const ApplicationsTable: React.FC = () => {
   };
 
   // Save Assignment without approving
-  const handleSaveAssignment = () => {
+  const handleSaveAssignment = async () => {
     if (!selectedApp) return;
     const finalEvent = assignedEventInput.trim();
     const finalRole = getEffectiveRole();
 
-    assignVolunteerEvents(selectedApp.id, finalEvent, undefined, finalRole);
-    
-    // Update local modal state
-    setSelectedApp(prev => prev ? {
-      ...prev,
-      assignedEvent1: finalEvent,
-      volunteerRole: finalRole
-    } : null);
-
-    setSaveSuccessNotice(true);
-    setTimeout(() => setSaveSuccessNotice(false), 2500);
+    const res = await assignVolunteerEvents(selectedApp.id, finalEvent, undefined, finalRole);
+    if (res.success && res.data) {
+      setSelectedApp(res.data);
+      setSaveSuccessNotice(true);
+      setTimeout(() => setSaveSuccessNotice(false), 2500);
+    } else {
+      alert(`Save failed: ${res.message}`);
+    }
   };
 
   // Open Approval Confirmation
@@ -153,18 +150,16 @@ export const ApplicationsTable: React.FC = () => {
   };
 
   // Confirm Approval (Strict State Machine Execution)
-  const handleConfirmApprove = () => {
+  const handleConfirmApprove = async () => {
     const finalEvent = assignedEventInput.trim();
     const finalRole = getEffectiveRole();
 
-    const ok = approveApplication(targetAppId, finalEvent, finalRole);
-    if (ok) {
+    const res = await approveApplication(targetAppId, finalEvent, finalRole);
+    if (res.success && res.data) {
       setIsApproveConfirmOpen(false);
-      // Refresh selectedApp view
-      const updated = applications.find(a => a.id === targetAppId);
-      if (updated) {
-        setSelectedApp(updated);
-      }
+      setSelectedApp(res.data);
+    } else {
+      alert(`Approval failed: ${res.message}`);
     }
   };
 
@@ -174,18 +169,16 @@ export const ApplicationsTable: React.FC = () => {
     setIsRejectModalOpen(true);
   };
 
-  const handleConfirmReject = () => {
+  const handleConfirmReject = async () => {
     if (!rejectionReasonInput.trim()) return;
-    rejectApplication(targetAppId, rejectionReasonInput.trim());
-    setIsRejectModalOpen(false);
-    if (selectedApp && selectedApp.id === targetAppId) {
-      setSelectedApp(prev => prev ? { 
-        ...prev, 
-        status: 'REJECTED', 
-        rejectionReason: rejectionReasonInput.trim(),
-        volunteerId: undefined,
-        qrToken: undefined 
-      } : null);
+    const res = await rejectApplication(targetAppId, rejectionReasonInput.trim());
+    if (res.success && res.data) {
+      setIsRejectModalOpen(false);
+      if (selectedApp && selectedApp.id === targetAppId) {
+        setSelectedApp(res.data);
+      }
+    } else {
+      alert(`Rejection failed: ${res.message}`);
     }
   };
 
@@ -194,10 +187,14 @@ export const ApplicationsTable: React.FC = () => {
     setIsDeleteConfirmOpen(true);
   };
 
-  const handleConfirmDelete = () => {
-    deleteApplication(targetAppId);
-    setIsDeleteConfirmOpen(false);
-    setIsViewModalOpen(false);
+  const handleConfirmDelete = async () => {
+    const res = await deleteApplication(targetAppId);
+    if (res.success) {
+      setIsDeleteConfirmOpen(false);
+      setIsViewModalOpen(false);
+    } else {
+      alert(`Delete failed: ${res.message}`);
+    }
   };
 
   return (

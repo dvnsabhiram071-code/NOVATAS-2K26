@@ -115,9 +115,9 @@ export const AdminSettingsView: React.FC = () => {
     setAuditLogs(adminAuthService.getAuditLogs());
   };
 
-  const handleSaveGeneral = (e: React.FormEvent) => {
+  const handleSaveGeneral = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateSettings({
+    await updateSettings({
       eventName,
       department,
       isRegistrationOpen,
