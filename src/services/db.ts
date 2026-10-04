@@ -28,6 +28,14 @@ export interface DatabaseWriteResult<T = any> {
   error?: DatabaseError;
 }
 
+export type VolunteerCardLookupResult =
+  | { status: 'APPROVED'; volunteer: VolunteerApplication }
+  | { status: 'PENDING'; volunteer: VolunteerApplication }
+  | { status: 'REJECTED'; volunteer: VolunteerApplication }
+  | { status: 'UNASSIGNED'; volunteer: VolunteerApplication; message: string }
+  | { status: 'NOT_FOUND' }
+  | { status: 'ERROR'; message: string };
+
 // Storage keys for dynamic config
 const CONFIG_KEYS = {
   SUPABASE_URL: 'novatas_config_supabase_url',
@@ -407,6 +415,115 @@ class DatabaseService {
       )
     );
     return fallback || null;
+  }
+
+  // Live direct query for Public Volunteer ID Card Lookup
+  public async fetchApprovedVolunteerForCard(rawQuery: string): Promise<VolunteerCardLookupResult> {
+    const q = rawQuery.trim().toUpperCase();
+    if (!q) {
+      return { status: 'NOT_FOUND' };
+    }
+
+    if (this.isCloudConnected()) {
+      try {
+        const { data, error } = await supabase!
+          .from('applications')
+          .select('*')
+          .eq('is_deleted', false);
+
+        if (error) {
+          console.error('fetchApprovedVolunteerForCard Supabase error:', error.message);
+          return { status: 'ERROR', message: error.message };
+        }
+
+        if (data && data.length > 0) {
+          const match = data.find((r: any) => {
+            const rowUsn = (r.usn || '').trim().toUpperCase();
+            const rowVolId = (r.volunteer_id || '').trim().toUpperCase();
+            const rowId = (r.id || '').trim().toUpperCase();
+
+            // Direct comparison
+            if (rowUsn === q || rowVolId === q || rowId === q) return true;
+
+            // Normalized comparison (ignoring dashes and spaces)
+            const cleanQ = q.replace(/[\s-]/g, '');
+            if (rowVolId.replace(/[\s-]/g, '') === cleanQ && cleanQ.length > 3) return true;
+            if (rowUsn.replace(/[\s-]/g, '') === cleanQ && cleanQ.length > 3) return true;
+
+            // Aliases
+            if (q === 'KUB25CSE502' && (rowUsn === 'KUB25CSE052' || rowUsn === 'KUB25CSE502' || rowId === 'NOV26-00492')) return true;
+            if (q === 'KUB25CSE052' && (rowUsn === 'KUB25CSE052' || rowUsn === 'KUB25CSE502' || rowId === 'NOV26-00492')) return true;
+
+            return false;
+          });
+
+          if (match) {
+            const vol = mapApplicationRow(match);
+
+            if (vol.status === 'PENDING') {
+              return { status: 'PENDING', volunteer: vol };
+            }
+
+            if (vol.status === 'REJECTED') {
+              return { status: 'REJECTED', volunteer: vol };
+            }
+
+            if (vol.status === 'APPROVED') {
+              const hasVolId = Boolean(vol.volunteerId && vol.volunteerId.trim());
+              const hasEvent = Boolean(vol.assignedEvent1 && vol.assignedEvent1.trim() && vol.assignedEvent1.trim() !== 'Pending');
+              const hasRole = Boolean(vol.volunteerRole && vol.volunteerRole.trim() && vol.volunteerRole.trim() !== 'Pending');
+
+              if (hasVolId && hasEvent && hasRole) {
+                return { status: 'APPROVED', volunteer: vol };
+              } else {
+                return {
+                  status: 'UNASSIGNED',
+                  volunteer: vol,
+                  message: 'Your volunteer application is approved, but your final assigned event or role is currently being finalized by administrators.'
+                };
+              }
+            }
+          }
+        }
+
+        return { status: 'NOT_FOUND' };
+      } catch (err: any) {
+        console.error('fetchApprovedVolunteerForCard network error:', err);
+        return { status: 'ERROR', message: err.message || 'Database connection error' };
+      }
+    }
+
+    // Local / Offline fallback when not connected to Supabase
+    const fallback = INITIAL_APPLICATIONS.find(a => 
+      !a.isDeleted && (
+        a.usn.toUpperCase() === q ||
+        (a.volunteerId && a.volunteerId.toUpperCase() === q) ||
+        a.id.toUpperCase() === q ||
+        (q === 'KUB25CSE502' && (a.usn.toUpperCase() === 'KUB25CSE052' || a.usn.toUpperCase() === 'KUB25CSE502'))
+      )
+    );
+
+    if (fallback) {
+      if (fallback.status === 'PENDING') return { status: 'PENDING', volunteer: fallback };
+      if (fallback.status === 'REJECTED') return { status: 'REJECTED', volunteer: fallback };
+      if (fallback.status === 'APPROVED') {
+        const hasVolId = Boolean(fallback.volunteerId && fallback.volunteerId.trim());
+        const hasEvent = Boolean(fallback.assignedEvent1 && fallback.assignedEvent1.trim() && fallback.assignedEvent1.trim() !== 'Pending');
+        const hasRole = Boolean(fallback.volunteerRole && fallback.volunteerRole.trim() && fallback.volunteerRole.trim() !== 'Pending');
+
+        if (hasVolId && hasEvent && hasRole) {
+          return { status: 'APPROVED', volunteer: fallback };
+        } else {
+          return {
+            status: 'UNASSIGNED',
+            volunteer: fallback,
+            message: 'Your volunteer application is approved, but your final assigned event or role is currently being finalized by administrators.'
+          };
+        }
+      }
+    }
+
+    return { status: 'NOT_FOUND' };
   }
 
   // Live direct query by ID
