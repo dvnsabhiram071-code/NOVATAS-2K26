@@ -15,7 +15,7 @@ import {
   INITIAL_FAQS
 } from '../data/initialData';
 import { adminAuthService } from '../services/adminAuthService';
-import { dbService } from '../services/db';
+import { dbService, DatabaseWriteResult } from '../services/db';
 
 interface AppContextType {
   applications: VolunteerApplication[];
@@ -54,10 +54,10 @@ interface AppContextType {
   deleteEvent: (id: string) => Promise<{ success: boolean; message: string }>;
 
   // Contact Management
-  addContact: (contact: Omit<ContactPerson, 'id' | 'createdAt'>) => Promise<{ success: boolean; message: string }>;
-  updateContact: (id: string, data: Partial<ContactPerson>) => Promise<{ success: boolean; message: string }>;
-  deleteContact: (id: string) => Promise<{ success: boolean; message: string }>;
-  toggleContactStatus: (id: string) => Promise<void>;
+  addContact: (contact: Omit<ContactPerson, 'id' | 'createdAt'>) => Promise<DatabaseWriteResult<ContactPerson>>;
+  updateContact: (id: string, data: Partial<ContactPerson>) => Promise<DatabaseWriteResult<ContactPerson>>;
+  deleteContact: (id: string) => Promise<DatabaseWriteResult>;
+  toggleContactStatus: (id: string) => Promise<DatabaseWriteResult>;
   reorderContacts: (orderedIds: string[]) => Promise<void>;
 
   // FAQ Management
@@ -412,7 +412,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Contact Management
   const addContact = async (contactData: Omit<ContactPerson, 'id' | 'createdAt'>): Promise<{ success: boolean; message: string }> => {
-    const id = `cnt-${Date.now().toString(36)}`;
+    const id = `CNT-${Date.now().toString(36).toUpperCase()}`;
     const newContact: ContactPerson = {
       ...contactData,
       id,
@@ -420,46 +420,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString()
     };
     const res = await dbService.saveContact(newContact);
-    if (res.success) {
-      setContacts(prev => [...prev, newContact]);
-      adminAuthService.logAudit('CONTACT_CREATED', 'CONTACT', id, newContact.name);
+    // 7. Only then update the Admin UI
+    if (res.success && res.data) {
+      setContacts(prev => [...prev, res.data!]);
+      adminAuthService.logAudit('CONTACT_CREATED', 'CONTACT', id, res.data.name);
     }
     return res;
   };
 
-  const updateContact = async (id: string, data: Partial<ContactPerson>): Promise<{ success: boolean; message: string }> => {
-    const existing = contacts.find(c => c.id === id);
-    if (!existing) return { success: false, message: 'Contact not found' };
+  const updateContact = async (id: string, data: Partial<ContactPerson>): Promise<DatabaseWriteResult<ContactPerson>> => {
+    const existing = contacts.find(c => c.id.toLowerCase() === id.toLowerCase());
+    if (!existing) {
+      return { 
+        success: false, 
+        message: 'Contact not found',
+        error: {
+          code: 'NOT_FOUND',
+          message: `Contact with ID "${id}" not found in local active list.`
+        }
+      };
+    }
     const updated: ContactPerson = { ...existing, ...data, updatedAt: new Date().toISOString() };
     const res = await dbService.saveContact(updated);
-    if (res.success) {
-      setContacts(prev => prev.map(c => c.id === id ? updated : c));
-      adminAuthService.logAudit('CONTACT_UPDATED', 'CONTACT', id, 'Updated contact');
+    // 7. Only then update the Admin UI with verified refetched row
+    if (res.success && res.data) {
+      setContacts(prev => prev.map(c => c.id.toLowerCase() === id.toLowerCase() ? res.data! : c));
+      adminAuthService.logAudit('CONTACT_UPDATED', 'CONTACT', id, `Updated contact ${res.data.name}`);
     }
     return res;
   };
 
-  const deleteContact = async (id: string): Promise<{ success: boolean; message: string }> => {
+  const deleteContact = async (id: string): Promise<DatabaseWriteResult> => {
     const res = await dbService.deleteContact(id);
     if (res.success) {
-      setContacts(prev => prev.filter(c => c.id !== id));
+      setContacts(prev => prev.filter(c => c.id.toLowerCase() !== id.toLowerCase()));
       adminAuthService.logAudit('CONTACT_DELETED', 'CONTACT', id, 'Deleted contact');
     }
     return res;
   };
 
-  const toggleContactStatus = async (id: string): Promise<void> => {
-    const target = contacts.find(c => c.id === id);
-    if (!target) return;
+  const toggleContactStatus = async (id: string): Promise<DatabaseWriteResult> => {
+    const target = contacts.find(c => c.id.toLowerCase() === id.toLowerCase());
+    if (!target) {
+      return { 
+        success: false, 
+        message: 'Contact not found',
+        error: { code: 'NOT_FOUND', message: `Contact "${id}" not found.` }
+      };
+    }
     const updated: ContactPerson = { 
       ...target, 
       status: target.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', 
       updatedAt: new Date().toISOString() 
     };
     const res = await dbService.saveContact(updated);
-    if (res.success) {
-      setContacts(prev => prev.map(c => c.id === id ? updated : c));
+    if (res.success && res.data) {
+      setContacts(prev => prev.map(c => c.id.toLowerCase() === id.toLowerCase() ? res.data! : c));
     }
+    return res;
   };
 
   const reorderContacts = async (orderedIds: string[]): Promise<void> => {

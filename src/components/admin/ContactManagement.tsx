@@ -32,6 +32,19 @@ export const ContactManagement: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<ContactPerson | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<{
+    code?: string;
+    message: string;
+    details?: string;
+    hint?: string;
+  } | null>(null);
+  const [bannerError, setBannerError] = useState<{
+    code?: string;
+    message: string;
+    details?: string;
+    hint?: string;
+  } | null>(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -51,6 +64,7 @@ export const ContactManagement: React.FC = () => {
 
   const handleOpenAdd = () => {
     setEditingContact(null);
+    setSaveError(null);
     setFormData({
       name: '',
       email: '',
@@ -66,6 +80,7 @@ export const ContactManagement: React.FC = () => {
 
   const handleOpenEdit = (contact: ContactPerson) => {
     setEditingContact(contact);
+    setSaveError(null);
     setFormData({
       name: contact.name,
       email: contact.email,
@@ -121,29 +136,61 @@ export const ContactManagement: React.FC = () => {
     e.preventDefault();
     if (!validateForm()) return;
 
-    if (editingContact) {
-      await updateContact(editingContact.id, {
-        name: formData.name.trim(),
-        email: formData.email.trim(),
-        mobile: formData.mobile.trim(),
-        role: formData.role.trim() || undefined,
-        imageUrl: formData.imageUrl,
-        status: formData.status,
-        displayOrder: Number(formData.displayOrder) || 1
-      });
-    } else {
-      await addContact({
-        name: formData.name.trim(),
-        email: formData.email.trim(),
-        mobile: formData.mobile.trim(),
-        role: formData.role.trim() || undefined,
-        imageUrl: formData.imageUrl,
-        status: formData.status,
-        displayOrder: Number(formData.displayOrder) || (contacts.length + 1)
-      });
-    }
+    setIsSaving(true);
+    setSaveError(null);
 
-    setIsModalOpen(false);
+    try {
+      if (editingContact) {
+        // 1. Execute actual Supabase UPDATE
+        const res = await updateContact(editingContact.id, {
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          mobile: formData.mobile.trim(),
+          role: formData.role.trim() || undefined,
+          imageUrl: formData.imageUrl,
+          status: formData.status,
+          displayOrder: Number(formData.displayOrder) || 1
+        });
+
+        // 2, 3, 4. DO NOT silently catch/ignore the error. Display the error in the Admin UI!
+        if (!res.success) {
+          setSaveError(res.error || {
+            code: 'UPDATE_FAILED',
+            message: res.message || 'Supabase contact UPDATE failed.'
+          });
+          return; // DO NOT close modal!
+        }
+      } else {
+        const res = await addContact({
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          mobile: formData.mobile.trim(),
+          role: formData.role.trim() || undefined,
+          imageUrl: formData.imageUrl,
+          status: formData.status,
+          displayOrder: Number(formData.displayOrder) || (contacts.length + 1)
+        });
+
+        if (!res.success) {
+          setSaveError(res.error || {
+            code: 'INSERT_FAILED',
+            message: res.message || 'Supabase contact INSERT failed.'
+          });
+          return;
+        }
+      }
+
+      // 5, 6, 7. Verify UPDATE response & refetch succeeded, only then close modal
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setSaveError({
+        code: 'CLIENT_EXCEPTION',
+        message: err.message || 'Unexpected exception during contact save.',
+        details: String(err.stack || err)
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -168,6 +215,23 @@ export const ContactManagement: React.FC = () => {
           <span>+ ADD CONTACT</span>
         </button>
       </div>
+
+      {/* Global Error Banner */}
+      {bannerError && (
+        <div className="p-4 bg-rose-950/90 border border-rose-500 rounded-2xl text-rose-200 text-xs font-mono flex items-start justify-between gap-3 shadow-xl">
+          <div className="space-y-1">
+            <div className="flex items-center space-x-2 text-rose-300 font-bold">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>DATABASE ACTION FAILED {bannerError.code ? `[${bannerError.code}]` : ''}</span>
+            </div>
+            <p className="text-white font-semibold">{bannerError.message}</p>
+            {bannerError.details && <p className="text-[11px] text-rose-300/80">{bannerError.details}</p>}
+          </div>
+          <button onClick={() => setBannerError(null)} className="text-slate-400 hover:text-white p-1">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Main Table / Directory Card */}
       <div className="glass-panel rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
@@ -270,7 +334,12 @@ export const ContactManagement: React.FC = () => {
                       <div className="flex items-center justify-end space-x-2">
                         {/* Toggle Status */}
                         <button
-                          onClick={() => toggleContactStatus(contact.id)}
+                          onClick={async () => {
+                            const res = await toggleContactStatus(contact.id);
+                            if (!res.success) {
+                              setBannerError(res.error || { message: res.message });
+                            }
+                          }}
                           title={contact.status === 'ACTIVE' ? 'Deactivate Contact' : 'Activate Contact'}
                           className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
                             contact.status === 'ACTIVE'
@@ -473,10 +542,34 @@ export const ContactManagement: React.FC = () => {
                 </div>
               </div>
 
+              {/* Complete Database Error Display (Step 4: Display the error in Admin UI) */}
+              {saveError && (
+                <div className="p-4 bg-rose-950/95 border-2 border-rose-500 rounded-2xl text-rose-200 text-xs font-mono space-y-2 shadow-2xl animate-in fade-in">
+                  <div className="flex items-center space-x-2 text-rose-300 font-bold">
+                    <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                    <span className="text-sm">SUPABASE DATABASE WRITE ERROR {saveError.code ? `[${saveError.code}]` : ''}</span>
+                  </div>
+                  <p className="text-white font-semibold text-xs leading-relaxed">{saveError.message}</p>
+                  {saveError.details && (
+                    <div className="text-[11px] text-rose-200 bg-black/70 p-2.5 rounded-xl border border-rose-900/60 break-all">
+                      <span className="text-slate-400 font-bold block mb-0.5">Details:</span>
+                      {saveError.details}
+                    </div>
+                  )}
+                  {saveError.hint && (
+                    <div className="text-[11px] text-cyan-200 bg-cyan-950/60 p-2.5 rounded-xl border border-cyan-800/60">
+                      <span className="text-cyan-400 font-bold block mb-0.5">Hint:</span>
+                      {saveError.hint}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Action Buttons */}
               <div className="pt-4 border-t border-slate-800 flex items-center justify-end space-x-3">
                 <button
                   type="button"
+                  disabled={isSaving}
                   onClick={() => setIsModalOpen(false)}
                   className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-mono rounded-xl transition-colors cursor-pointer"
                 >
@@ -484,9 +577,11 @@ export const ContactManagement: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-display font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
+                  disabled={isSaving}
+                  className="px-6 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-display font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-cyan-500/20 cursor-pointer disabled:opacity-50 flex items-center space-x-2"
                 >
-                  SAVE CONTACT
+                  {isSaving && <Sparkles className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSaving ? 'WRITING TO SUPABASE...' : editingContact ? 'UPDATE CONTACT' : 'SAVE CONTACT'}</span>
                 </button>
               </div>
 
@@ -523,9 +618,13 @@ export const ContactManagement: React.FC = () => {
                 CANCEL
               </button>
               <button
-                onClick={() => {
-                  deleteContact(deleteConfirmId);
+                onClick={async () => {
+                  if (!deleteConfirmId) return;
+                  const res = await deleteContact(deleteConfirmId);
                   setDeleteConfirmId(null);
+                  if (!res.success) {
+                    setBannerError(res.error || { message: res.message });
+                  }
                 }}
                 className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-mono font-bold rounded-xl cursor-pointer"
               >

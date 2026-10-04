@@ -14,6 +14,20 @@ import {
   INITIAL_SETTINGS 
 } from '../data/initialData';
 
+export interface DatabaseError {
+  code?: string;
+  message: string;
+  details?: string;
+  hint?: string;
+}
+
+export interface DatabaseWriteResult<T = any> {
+  success: boolean;
+  data?: T;
+  message: string;
+  error?: DatabaseError;
+}
+
 // Storage keys for dynamic config
 const CONFIG_KEYS = {
   SUPABASE_URL: 'novatas_config_supabase_url',
@@ -31,8 +45,18 @@ const CACHE_KEYS = {
 
 // Resolve Supabase credentials: Vercel environment variables take priority, followed by stored config
 function resolveSupabaseConfig(): { url: string; key: string; source: 'env' | 'storage' | 'none' } {
-  let envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-  let envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+  let envUrl = (
+    import.meta.env.VITE_SUPABASE_URL || 
+    (import.meta.env as any).SUPABASE_URL || 
+    (import.meta.env as any).NEXT_PUBLIC_SUPABASE_URL || 
+    ''
+  ).trim();
+  let envKey = (
+    import.meta.env.VITE_SUPABASE_ANON_KEY || 
+    (import.meta.env as any).SUPABASE_ANON_KEY || 
+    (import.meta.env as any).NEXT_PUBLIC_SUPABASE_ANON_KEY || 
+    ''
+  ).trim();
 
   // Strip trailing slashes and surrounding quotes
   envUrl = envUrl.replace(/\/+$/, '').replace(/^["']|["']$/g, '');
@@ -633,44 +657,171 @@ class DatabaseService {
     return INITIAL_CONTACTS;
   }
 
-  public async saveContact(contact: ContactPerson): Promise<{ success: boolean; message: string }> {
+  public async saveContact(contact: ContactPerson): Promise<DatabaseWriteResult<ContactPerson>> {
     if (!this.isCloudConnected()) {
-      return { success: false, message: 'Not connected to Supabase database.' };
+      return { 
+        success: false, 
+        message: 'Cannot save contact: Not connected to Supabase database. Missing VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.',
+        error: {
+          code: 'DISCONNECTED',
+          message: 'Supabase client is not connected.',
+          details: `Active URL: "${activeConfig.url || 'NOT_CONFIGURED'}", Source: "${activeConfig.source}"`,
+          hint: 'Ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in Vercel environment variables and redeployed, or configure under Settings -> Cloud Database.'
+        }
+      };
     }
 
     try {
-      const { error } = await supabase!
-        .from('contacts')
-        .upsert({
-          id: contact.id,
-          name: contact.name,
-          email: contact.email,
-          mobile: contact.mobile,
-          image_url: contact.imageUrl,
-          role: contact.role,
-          status: contact.status,
-          display_order: contact.displayOrder,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' });
+      const payload = {
+        id: contact.id,
+        name: contact.name,
+        email: contact.email,
+        mobile: contact.mobile,
+        image_url: contact.imageUrl,
+        role: contact.role || null,
+        status: contact.status,
+        display_order: contact.displayOrder,
+        updated_at: new Date().toISOString(),
+      };
 
-      if (error) return { success: false, message: error.message };
-      return { success: true, message: 'Saved contact to Supabase.' };
+      // 1. Execute actual Supabase UPDATE / UPSERT
+      const { data: updateData, error } = await supabase!
+        .from('contacts')
+        .upsert(payload, { onConflict: 'id' })
+        .select();
+
+      // 2. Capture complete returned error (code, message, details, hint)
+      if (error) {
+        console.error('Supabase contact update error:', error);
+        return { 
+          success: false, 
+          message: error.message,
+          error: {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint
+          }
+        };
+      }
+
+      // 5. Verify the UPDATE response contains the changed row
+      if (!updateData || updateData.length === 0) {
+        return {
+          success: false,
+          message: 'Database write executed but returned 0 rows.',
+          error: {
+            code: 'NO_ROWS_AFFECTED',
+            message: 'Database write executed but returned 0 rows.',
+            details: 'PostgREST returned an empty array on select(). This usually indicates an RLS policy restriction on SELECT or UPDATE for anonymous users.',
+            hint: 'Verify Row Level Security policies on table public.contacts in Supabase.'
+          }
+        };
+      }
+
+      // 6. Refetch the same contact from Supabase
+      const { data: refetched, error: refetchErr } = await supabase!
+        .from('contacts')
+        .select('*')
+        .eq('id', contact.id)
+        .maybeSingle();
+
+      if (refetchErr) {
+        return {
+          success: false,
+          message: `Verification refetch failed: ${refetchErr.message}`,
+          error: {
+            code: refetchErr.code,
+            message: refetchErr.message,
+            details: refetchErr.details,
+            hint: refetchErr.hint
+          }
+        };
+      }
+
+      if (!refetched) {
+        return {
+          success: false,
+          message: `Verification refetch returned null for contact ID "${contact.id}".`,
+          error: {
+            code: 'ROW_NOT_FOUND',
+            message: `Contact "${contact.id}" could not be refetched from Supabase after update.`,
+            details: 'Query select(*) returned no matching row.',
+            hint: 'Check table public.contacts in Supabase SQL Editor.'
+          }
+        };
+      }
+
+      const verifiedContact: ContactPerson = {
+        id: refetched.id,
+        name: refetched.name,
+        email: refetched.email,
+        mobile: refetched.mobile,
+        imageUrl: refetched.image_url || '',
+        role: refetched.role || '',
+        status: refetched.status,
+        displayOrder: refetched.display_order,
+        createdAt: refetched.created_at,
+        updatedAt: refetched.updated_at,
+      };
+
+      // 7. Succeeded with verified database row
+      return { 
+        success: true, 
+        data: verifiedContact,
+        message: 'Saved and verified contact in Supabase database.' 
+      };
     } catch (err: any) {
-      return { success: false, message: err.message || 'Error saving contact' };
+      console.error('Contact save exception:', err);
+      return { 
+        success: false, 
+        message: err.message || 'Error saving contact',
+        error: {
+          code: 'EXCEPTION',
+          message: err.message || 'Error saving contact',
+          details: String(err.stack || err),
+          hint: 'Check network connectivity to Supabase.'
+        }
+      };
     }
   }
 
-  public async deleteContact(id: string): Promise<{ success: boolean; message: string }> {
+  public async deleteContact(id: string): Promise<DatabaseWriteResult> {
     if (!this.isCloudConnected()) {
-      return { success: false, message: 'Not connected to Supabase database.' };
+      return { 
+        success: false, 
+        message: 'Not connected to Supabase database.',
+        error: {
+          code: 'DISCONNECTED',
+          message: 'Supabase client is not connected.'
+        }
+      };
     }
 
     try {
       const { error } = await supabase!.from('contacts').delete().eq('id', id);
-      if (error) return { success: false, message: error.message };
+      if (error) {
+        return { 
+          success: false, 
+          message: error.message,
+          error: {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint
+          }
+        };
+      }
       return { success: true, message: 'Deleted contact from Supabase.' };
     } catch (err: any) {
-      return { success: false, message: err.message || 'Error deleting contact' };
+      return { 
+        success: false, 
+        message: err.message || 'Error deleting contact',
+        error: {
+          code: 'EXCEPTION',
+          message: err.message || 'Error deleting contact'
+        }
+      };
     }
   }
 

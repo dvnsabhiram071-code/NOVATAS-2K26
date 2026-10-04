@@ -366,7 +366,7 @@ export const INITIAL_APPLICATIONS: VolunteerApplication[] = [
 
 export const INITIAL_CONTACTS: ContactPerson[] = [
   {
-    id: 'cnt-001',
+    id: 'CNT-001',
     name: 'D V N S ABHIRAM',
     email: 'dvnsabhiram071@gmail.com',
     mobile: '8618842527',

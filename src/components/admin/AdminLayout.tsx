@@ -122,12 +122,12 @@ export const AdminLayout: React.FC<{ onExitAdmin: () => void; initialTab?: Admin
                 className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase border ${
                   isCloudConnected
                     ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-400'
-                    : 'bg-cyan-950/70 border-cyan-500/40 text-cyan-400'
+                    : 'bg-rose-950/70 border-rose-500/40 text-rose-400'
                 }`}
-                title={isCloudConnected ? 'Connected to Supabase PostgreSQL' : 'Persistent Storage Active (Add Supabase env vars in Vercel to connect cloud database)'}
+                title={isCloudConnected ? 'Connected to Supabase PostgreSQL' : 'Supabase Disconnected: Missing VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel or Settings.'}
               >
                 <Database className="w-3 h-3" />
-                <span>{isCloudConnected ? 'SUPABASE LIVE' : 'DATABASE PERSISTENT'}</span>
+                <span>{isCloudConnected ? 'SUPABASE LIVE' : 'SUPABASE DISCONNECTED'}</span>
               </span>
 
               <button
