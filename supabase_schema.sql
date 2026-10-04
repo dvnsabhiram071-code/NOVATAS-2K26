@@ -131,24 +131,37 @@ ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 
--- Anonymous / Public access policies (for public event website)
-CREATE POLICY "Public can view active events" ON public.events FOR SELECT USING (true);
-CREATE POLICY "Public can view active contacts" ON public.contacts FOR SELECT USING (true);
-CREATE POLICY "Public can view active faqs" ON public.faqs FOR SELECT USING (true);
-CREATE POLICY "Public can view settings" ON public.settings FOR SELECT USING (true);
+-- Allow unrestricted anonymous read/write/upsert for synchronized operation
+DROP POLICY IF EXISTS "Public full access on applications" ON public.applications;
+CREATE POLICY "Public full access on applications" ON public.applications FOR ALL USING (true) WITH CHECK (true);
 
--- Public application submission and lookup
-CREATE POLICY "Public can submit applications" ON public.applications FOR INSERT WITH CHECK (true);
-CREATE POLICY "Public can view non-deleted applications" ON public.applications FOR SELECT USING (is_deleted = false);
-CREATE POLICY "Public/Admin can update applications" ON public.applications FOR UPDATE USING (true);
+DROP POLICY IF EXISTS "Public full access on events" ON public.events;
+CREATE POLICY "Public full access on events" ON public.events FOR ALL USING (true) WITH CHECK (true);
 
--- Admin tables & full access policies
-CREATE POLICY "Admin full access on events" ON public.events FOR ALL USING (true);
-CREATE POLICY "Admin full access on contacts" ON public.contacts FOR ALL USING (true);
-CREATE POLICY "Admin full access on faqs" ON public.faqs FOR ALL USING (true);
-CREATE POLICY "Admin full access on settings" ON public.settings FOR ALL USING (true);
-CREATE POLICY "Admin full access on admins" ON public.admins FOR ALL USING (true);
-CREATE POLICY "Admin full access on audit_logs" ON public.audit_logs FOR ALL USING (true);
+DROP POLICY IF EXISTS "Public full access on contacts" ON public.contacts;
+CREATE POLICY "Public full access on contacts" ON public.contacts FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public full access on faqs" ON public.faqs;
+CREATE POLICY "Public full access on faqs" ON public.faqs FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public full access on settings" ON public.settings;
+CREATE POLICY "Public full access on settings" ON public.settings FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public full access on admins" ON public.admins;
+CREATE POLICY "Public full access on admins" ON public.admins FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public full access on audit_logs" ON public.audit_logs;
+CREATE POLICY "Public full access on audit_logs" ON public.audit_logs FOR ALL USING (true) WITH CHECK (true);
+
+-- Enable Supabase Realtime for instant cross-device updates
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.applications, public.events, public.contacts, public.faqs, public.settings;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  NULL;
+END $$;
 
 -- =========================================================================
 -- INITIAL SEED DATA
@@ -199,3 +212,49 @@ VALUES
   ('FAQ-03', 'When do I receive my Volunteer ID and Badge?', 'Your official digital Volunteer ID and holographic badge are generated ONLY after your application has been reviewed and approved by the admin committee.', 'Badges & QR', 'ACTIVE', 3),
   ('FAQ-04', 'How does event check-in work?', 'Once approved, your ID card contains an encrypted holographic QR code. On event day, coordinators scan your badge with the admin scanner to record check-in.', 'Badges & QR', 'ACTIVE', 4)
 ON CONFLICT (id) DO NOTHING;
+
+-- Seed Applications
+INSERT INTO public.applications (
+  id, application_id, full_name, usn, department, section, mobile, email, photo_url,
+  preference1, preference2, status, assigned_event_1, assigned_category, volunteer_role,
+  volunteer_id, qr_token, approved_at, submitted_at, checked_in, checked_in_at, is_deleted
+)
+VALUES
+  (
+    'NOV26-00492', 'NOV26-00492', 'D V N S ABHIRAM', 'KUB25CSE052', 'CSE', 'A', '8618842527', 'dvnsabhiram071@gmail.com',
+    'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=600',
+    'Ramp Walk', 'Chess', 'APPROVED', 'Ramp Walk', 'CULTURAL', 'Stage Coordination',
+    'NVT26-V00492', 'sec-9842a1', '2026-10-03T10:00:00Z', '2026-10-02T10:00:00Z', FALSE, NULL, FALSE
+  ),
+  (
+    'NOV26-00482', 'NOV26-00482', 'Rahul Kumar', '1XX23CS001', 'CSE', 'B', '9876543210', 'rahul.kumar@gmail.com',
+    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=400',
+    'Cricket', 'Photography', 'APPROVED', 'Photography', 'MEDIA / CREATIVE', 'Photography Support',
+    'NVT26-V0482', 'sec-482bc3', '2026-10-02T14:30:00Z', '2026-10-01T10:15:00Z', TRUE, '2026-10-04T10:42:00Z', FALSE
+  ),
+  (
+    'NOV26-00067', 'NOV26-00067', 'Priya Sharma', '1XX23CS045', 'CSE', 'A', '9812345678', 'priya.sharma@gmail.com',
+    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=400',
+    'Dance', 'Singing', 'APPROVED', 'Dance', 'CULTURAL', 'Stage Coordination',
+    'NVT26-V0067', 'sec-0067ab', '2026-10-02T15:10:00Z', '2026-10-01T11:20:00Z', FALSE, NULL, FALSE
+  ),
+  (
+    'NOV26-00092', 'NOV26-00092', 'Arjun Kumar', '1XX23CS012', 'CSE', 'D', '9845671230', 'arjun.k@gmail.com',
+    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=400',
+    'Chess', 'Tug of War', 'APPROVED', 'Chess', 'SPORTS', 'Event Coordination',
+    'NVT26-V0092', 'sec-0092cd', '2026-10-02T16:00:00Z', '2026-10-01T12:05:00Z', TRUE, '2026-10-04T09:15:00Z', FALSE
+  ),
+  (
+    'NOV26-00483', 'NOV26-00483', 'Ananya Rao', '1XX23CS088', 'CSE', 'C', '9765432109', 'ananya.rao@gmail.com',
+    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400',
+    'Reels Making', 'Anchoring', 'PENDING', NULL, NULL, NULL,
+    NULL, NULL, NULL, '2026-10-01T14:30:00Z', FALSE, NULL, FALSE
+  ),
+  (
+    'NOV26-00484', 'NOV26-00484', 'Karthik S', '1XX23CS033', 'CSE', 'B', '9871234560', 'karthik.s@gmail.com',
+    'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=400',
+    'Cricket', 'Free Fire', 'PENDING', NULL, NULL, NULL,
+    NULL, NULL, NULL, '2026-10-01T16:45:00Z', FALSE, NULL, FALSE
+  )
+ON CONFLICT (id) DO NOTHING;
+

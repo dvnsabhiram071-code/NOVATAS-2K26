@@ -67,9 +67,11 @@ interface AppContextType {
   toggleFAQStatus: (id: string) => void;
   reorderFAQs: (orderedIds: string[]) => void;
   
-  // Settings
+  // Settings & Cloud Database
   updateSettings: (newSettings: Partial<AdminSettings>) => void;
   resetDemoData: () => void;
+  saveCloudConfig: (url: string, key: string) => Promise<{ success: boolean; message: string }>;
+  getCloudConfig: () => { url: string; key: string; source: 'env' | 'storage' | 'none' };
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -117,6 +119,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     refreshData();
+
+    // Subscribe to real-time changes from other devices via Supabase Realtime
+    const unsubscribe = dbService.subscribeToChanges(() => {
+      refreshData();
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // Submit new application: NEVER generates Volunteer ID, QR, or final assignment
@@ -153,86 +164,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Assign Volunteer Events & Role (Pre-approval draft assignment OR post-approval modification)
   const assignVolunteerEvents = (id: string, event1: string, event2?: string, role?: string) => {
     const matchedEvt = events.find(e => e.name.toLowerCase() === event1.toLowerCase());
-    setApplications(prev => prev.map(app => {
-      if (app.id !== id) return app;
-      const updated: VolunteerApplication = {
-        ...app,
-        assignedEvent1: event1,
-        assignedEvent2: event2 || undefined,
-        assignedCategory: matchedEvt ? matchedEvt.category : app.assignedCategory,
-        volunteerRole: role || app.volunteerRole,
-        updatedAt: new Date().toISOString()
-      };
-      dbService.saveApplication(updated);
-      return updated;
-    }));
+    const target = applications.find(a => a.id === id);
+    if (!target) return;
+
+    const updated: VolunteerApplication = {
+      ...target,
+      assignedEvent1: event1,
+      assignedEvent2: event2 || undefined,
+      assignedCategory: matchedEvt ? matchedEvt.category : target.assignedCategory,
+      volunteerRole: role || target.volunteerRole,
+      updatedAt: new Date().toISOString()
+    };
+
+    setApplications(prev => prev.map(app => app.id === id ? updated : app));
+    dbService.saveApplication(updated);
 
     adminAuthService.logAudit('EVENT_ASSIGNED', 'APPLICATION', id, `Assigned to ${event1}${role ? ` (${role})` : ''}`);
   };
 
   // Approve Application: Strict verification & generation of Volunteer ID + QR
   const approveApplication = (id: string, finalEvent?: string, volunteerRole?: string): boolean => {
-    let succeeded = false;
+    const target = applications.find(a => a.id === id && !a.isDeleted);
+    if (!target) return false;
 
-    setApplications(prev => prev.map(app => {
-      if (app.id !== id || app.isDeleted) return app;
+    const eventToAssign = finalEvent || target.assignedEvent1;
+    const roleToAssign = volunteerRole || target.volunteerRole;
 
-      const eventToAssign = finalEvent || app.assignedEvent1;
-      const roleToAssign = volunteerRole || app.volunteerRole;
-
-      if (!eventToAssign || !roleToAssign) {
-        console.warn('Cannot approve application: Final event and Volunteer role must both be assigned first.');
-        return app;
-      }
-
-      const numPart = app.id.replace('NOV26-', '').padStart(5, '0');
-      const volunteerId = app.volunteerId || `NVT26-V${numPart}`;
-      const qrToken = app.qrToken || `sec-${Math.random().toString(36).substring(2, 8)}`;
-
-      const matchedEvt = events.find(e => e.name.toLowerCase() === eventToAssign.toLowerCase());
-      const cat = matchedEvt ? matchedEvt.category : (app.assignedCategory || 'General Coordination');
-
-      succeeded = true;
-
-      const updated: VolunteerApplication = {
-        ...app,
-        status: 'APPROVED',
-        volunteerId,
-        qrToken,
-        assignedEvent1: eventToAssign,
-        assignedCategory: cat,
-        volunteerRole: roleToAssign,
-        approvedAt: app.approvedAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        rejectionReason: undefined
-      };
-
-      dbService.saveApplication(updated);
-      return updated;
-    }));
-
-    if (succeeded) {
-      adminAuthService.logAudit('APPLICATION_APPROVED', 'APPLICATION', id, `Approved and assigned to ${finalEvent || 'Event'}`);
+    if (!eventToAssign || !roleToAssign) {
+      console.warn('Cannot approve application: Final event and Volunteer role must both be assigned first.');
+      return false;
     }
 
-    return succeeded;
+    const numPart = target.id.replace('NOV26-', '').padStart(5, '0');
+    const volunteerId = target.volunteerId || `NVT26-V${numPart}`;
+    const qrToken = target.qrToken || `sec-${Math.random().toString(36).substring(2, 8)}`;
+
+    const matchedEvt = events.find(e => e.name.toLowerCase() === eventToAssign.toLowerCase());
+    const cat = matchedEvt ? matchedEvt.category : (target.assignedCategory || 'General Coordination');
+
+    const updated: VolunteerApplication = {
+      ...target,
+      status: 'APPROVED',
+      volunteerId,
+      qrToken,
+      assignedEvent1: eventToAssign,
+      assignedCategory: cat,
+      volunteerRole: roleToAssign,
+      approvedAt: target.approvedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      rejectionReason: undefined
+    };
+
+    setApplications(prev => prev.map(app => app.id === id ? updated : app));
+    dbService.saveApplication(updated);
+
+    adminAuthService.logAudit('APPLICATION_APPROVED', 'APPLICATION', id, `Approved and assigned to ${eventToAssign}`);
+
+    return true;
   };
 
   // Reject Application: No Volunteer ID, No QR, No Volunteer Card
   const rejectApplication = (id: string, reason: string) => {
-    setApplications(prev => prev.map(app => {
-      if (app.id !== id) return app;
-      const updated: VolunteerApplication = {
-        ...app,
-        status: 'REJECTED',
-        rejectionReason: reason || 'Requirements not met at this time.',
-        volunteerId: undefined,
-        qrToken: undefined,
-        updatedAt: new Date().toISOString()
-      };
-      dbService.saveApplication(updated);
-      return updated;
-    }));
+    const target = applications.find(a => a.id === id);
+    if (!target) return;
+
+    const updated: VolunteerApplication = {
+      ...target,
+      status: 'REJECTED',
+      rejectionReason: reason || 'Requirements not met at this time.',
+      volunteerId: undefined,
+      qrToken: undefined,
+      updatedAt: new Date().toISOString()
+    };
+
+    setApplications(prev => prev.map(app => app.id === id ? updated : app));
+    dbService.saveApplication(updated);
 
     adminAuthService.logAudit('APPLICATION_REJECTED', 'APPLICATION', id, `Reason: ${reason}`);
   };
@@ -480,6 +486,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dbService.saveSettings(INITIAL_SETTINGS);
   };
 
+  const saveCloudConfig = async (url: string, key: string) => {
+    const res = await dbService.setConfig(url, key);
+    if (res.success) {
+      setIsCloudConnected(true);
+      await refreshData();
+    }
+    return res;
+  };
+
+  const getCloudConfig = () => {
+    return dbService.getConfig();
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -523,6 +542,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         reorderFAQs,
         updateSettings,
         resetDemoData,
+        saveCloudConfig,
+        getCloudConfig,
       }}
     >
       {children}

@@ -117,7 +117,7 @@ export const AdminLayout: React.FC<{ onExitAdmin: () => void; initialTab?: Admin
 
           <div className="flex items-center space-x-3">
             {/* Database status and manual sync */}
-            <div className="hidden md:flex items-center space-x-2">
+            <div className="flex items-center space-x-2">
               <span 
                 className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase border ${
                   isCloudConnected

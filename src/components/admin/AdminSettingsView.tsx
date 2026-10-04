@@ -16,7 +16,10 @@ import {
   Lock,
   Clock,
   Sparkles,
-  X
+  X,
+  Database,
+  ExternalLink,
+  RefreshCw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { 
@@ -26,10 +29,46 @@ import {
 import { AdminAccount, AdminAuditLog } from '../../types';
 
 export const AdminSettingsView: React.FC = () => {
-  const { settings, updateSettings, resetDemoData } = useApp();
+  const { 
+    settings, 
+    updateSettings, 
+    resetDemoData, 
+    isCloudConnected, 
+    saveCloudConfig, 
+    getCloudConfig, 
+    refreshData 
+  } = useApp();
 
   // Settings subtab navigation
-  const [activeSubTab, setActiveSubTab] = useState<'general' | 'accounts' | 'password' | 'audit'>('general');
+  const [activeSubTab, setActiveSubTab] = useState<'general' | 'database' | 'accounts' | 'password' | 'audit'>('general');
+
+  // Cloud Database state
+  const initialCloud = getCloudConfig();
+  const [cloudUrl, setCloudUrl] = useState(initialCloud.url);
+  const [cloudKey, setCloudKey] = useState(initialCloud.key);
+  const [cloudSource, setCloudSource] = useState(initialCloud.source);
+  const [cloudTestLoading, setCloudTestLoading] = useState(false);
+  const [cloudStatusMsg, setCloudStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleSaveCloudConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCloudTestLoading(true);
+    setCloudStatusMsg(null);
+    try {
+      const res = await saveCloudConfig(cloudUrl, cloudKey);
+      if (res.success) {
+        setCloudStatusMsg({ type: 'success', text: res.message });
+        setCloudSource(getCloudConfig().source);
+        await refreshData();
+      } else {
+        setCloudStatusMsg({ type: 'error', text: res.message });
+      }
+    } catch (err: any) {
+      setCloudStatusMsg({ type: 'error', text: err.message || 'Connection failed' });
+    } finally {
+      setCloudTestLoading(false);
+    }
+  };
 
   // General Settings state
   const [eventName, setEventName] = useState(settings.eventName);
@@ -184,6 +223,18 @@ export const AdminSettingsView: React.FC = () => {
         >
           <Settings className="w-3.5 h-3.5" />
           <span>General Settings</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('database')}
+          className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-mono font-bold tracking-wider uppercase transition-all ${
+            activeSubTab === 'database'
+              ? 'bg-cyan-500 text-black shadow-md shadow-cyan-500/20'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5" />
+          <span>Cloud Database</span>
         </button>
 
         <button
@@ -367,6 +418,126 @@ export const AdminSettingsView: React.FC = () => {
             </div>
 
           </form>
+        </div>
+      )}
+
+      {/* SUBTAB: CLOUD DATABASE */}
+      {activeSubTab === 'database' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          <div className="glass-panel p-6 sm:p-8 rounded-3xl border border-slate-800 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <Database className="w-5 h-5 text-cyan-400" />
+                  <h3 className="font-display font-bold text-lg text-white">
+                    SHARED CLOUD DATABASE (SUPABASE POSTGRESQL)
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Single source of truth shared across all mobile phones, desktops, tablets, and the public website.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <span 
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold uppercase border ${
+                    isCloudConnected
+                      ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-400'
+                      : 'bg-amber-950/70 border-amber-500/40 text-amber-400'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${isCloudConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                  <span>{isCloudConnected ? 'SUPABASE LIVE' : 'DISCONNECTED / LOCAL CACHE'}</span>
+                </span>
+              </div>
+            </div>
+
+            {cloudStatusMsg && (
+              <div className={`p-4 rounded-xl border text-xs font-mono flex items-center justify-between ${
+                cloudStatusMsg.type === 'success' 
+                  ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300' 
+                  : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+              }`}>
+                <span>{cloudStatusMsg.text}</span>
+                <button onClick={() => setCloudStatusMsg(null)} className="text-slate-400 hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveCloudConfig} className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono uppercase text-slate-300 mb-1.5">
+                  SUPABASE PROJECT URL <span className="text-cyan-400">*</span>
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://your-project-id.supabase.co"
+                  value={cloudUrl}
+                  onChange={(e) => setCloudUrl(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-mono focus:outline-none focus:border-cyan-400"
+                  required
+                />
+                <p className="text-[11px] text-slate-500 font-mono mt-1">
+                  Found in your Supabase dashboard under: Project Settings → API → Project URL
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono uppercase text-slate-300 mb-1.5">
+                  SUPABASE PUBLIC ANON KEY <span className="text-cyan-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  value={cloudKey}
+                  onChange={(e) => setCloudKey(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-mono focus:outline-none focus:border-cyan-400"
+                  required
+                />
+                <p className="text-[11px] text-slate-500 font-mono mt-1">
+                  Found in your Supabase dashboard under: Project Settings → API → Project API Keys (anon public)
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3">
+                <div className="text-[11px] font-mono text-slate-400">
+                  {cloudSource === 'env' && (
+                    <span className="text-cyan-400">✓ Loaded from Vercel environment variables (VITE_SUPABASE_URL)</span>
+                  )}
+                  {cloudSource === 'storage' && (
+                    <span className="text-emerald-400">✓ Saved in browser cloud storage connection</span>
+                  )}
+                  {cloudSource === 'none' && (
+                    <span className="text-amber-400">⚠ No cloud database credentials configured yet</span>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={cloudTestLoading}
+                  className="flex items-center justify-center space-x-2 px-6 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-black font-display font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-cyan-500/20 disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw className={`w-4 h-4 ${cloudTestLoading ? 'animate-spin' : ''}`} />
+                  <span>{cloudTestLoading ? 'TESTING CONNECTION...' : 'SAVE & CONNECT DATABASE'}</span>
+                </button>
+              </div>
+            </form>
+
+            {/* Sync instructions */}
+            <div className="p-4 bg-slate-900/60 rounded-2xl border border-slate-800 text-xs space-y-2">
+              <h4 className="font-display font-bold text-white text-xs tracking-wider uppercase flex items-center space-x-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>CROSS-DEVICE SYNCHRONIZATION GUARANTEE</span>
+              </h4>
+              <ul className="text-slate-400 space-y-1 list-disc list-inside font-mono text-[11px]">
+                <li>Any changes made on this mobile phone or browser are stored directly in Supabase PostgreSQL.</li>
+                <li>Supabase Realtime automatically broadcasts updates to all connected devices in milliseconds.</li>
+                <li>When another device opens the public website, it always fetches the single source of truth from Supabase.</li>
+                <li>Initial records (approved volunteers, events, contacts, FAQs) are automatically seeded if the database is newly initialized.</li>
+              </ul>
+            </div>
+          </div>
         </div>
       )}
 
