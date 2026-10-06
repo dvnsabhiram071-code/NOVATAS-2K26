@@ -43,6 +43,35 @@ export interface DuplicateCheckResult {
   matchedFieldDescription?: string;
 }
 
+export interface PaginatedApplicationsQuery {
+  page: number; // 1-indexed
+  pageSize: number; // default 50
+  search?: string;
+  status?: string;
+  section?: string;
+  preference?: string;
+  assignedEvent?: string;
+  volunteerRole?: string;
+  checkedIn?: boolean;
+}
+
+export interface PaginatedApplicationsResult {
+  applications: VolunteerApplication[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface ApplicationStatsResult {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  assigned: number;
+  checkedIn: number;
+}
+
 /**
  * Normalizes USN consistently: trimmed and uppercase.
  * e.g., " kub25cse502 " -> "KUB25CSE502"
@@ -369,25 +398,186 @@ class DatabaseService {
   }
 
   // =========================================================================
-  // APPLICATIONS
+  // APPLICATIONS (Single Source of Truth: Supabase public.applications)
   // =========================================================================
+
+  // Scalable server-side paginated & filtered query against Supabase
+  public async fetchApplicationsPaginated(
+    params: PaginatedApplicationsQuery
+  ): Promise<{ success: boolean; data?: PaginatedApplicationsResult; message?: string; error?: DatabaseError }> {
+    if (!this.isCloudConnected()) {
+      return {
+        success: false,
+        message: 'Database is not connected. Please verify Supabase environment configuration.'
+      };
+    }
+
+    try {
+      const page = Math.max(1, params.page || 1);
+      const pageSize = Math.max(1, Math.min(100, params.pageSize || 50));
+      const from = (page - 1) * pageSize;
+      const to = from + pageSize - 1;
+
+      let query = supabase!
+        .from('applications')
+        .select('*', { count: 'exact' })
+        .eq('is_deleted', false);
+
+      // Search across multiple fields directly in PostgreSQL
+      if (params.search && params.search.trim()) {
+        const cleanQ = params.search.trim().replace(/[%_]/g, '');
+        if (cleanQ) {
+          query = query.or(
+            `full_name.ilike.%${cleanQ}%,usn.ilike.%${cleanQ}%,mobile.ilike.%${cleanQ}%,email.ilike.%${cleanQ}%,id.ilike.%${cleanQ}%,volunteer_id.ilike.%${cleanQ}%`
+          );
+        }
+      }
+
+      // Database-level exact filters
+      if (params.status && params.status !== 'ALL') {
+        query = query.eq('status', params.status);
+      }
+      if (params.section && params.section !== 'ALL') {
+        query = query.eq('section', params.section);
+      }
+      if (params.preference && params.preference !== 'ALL') {
+        query = query.or(`preference1.eq."${params.preference}",preference2.eq."${params.preference}"`);
+      }
+      if (params.assignedEvent && params.assignedEvent !== 'ALL') {
+        query = query.or(`assigned_event_1.eq."${params.assignedEvent}",assigned_event_2.eq."${params.assignedEvent}"`);
+      }
+      if (params.volunteerRole && params.volunteerRole !== 'ALL') {
+        query = query.eq('volunteer_role', params.volunteerRole);
+      }
+      if (typeof params.checkedIn === 'boolean') {
+        query = query.eq('checked_in', params.checkedIn);
+      }
+
+      // Order by newest first and paginate
+      query = query
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      const { data, count, error } = await query;
+
+      if (error) {
+        console.error('fetchApplicationsPaginated error:', error);
+        return {
+          success: false,
+          message: error.message,
+          error: {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint
+          }
+        };
+      }
+
+      const totalCount = count ?? (data ? data.length : 0);
+      const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      const applications = (data || []).map(mapApplicationRow);
+
+      return {
+        success: true,
+        data: {
+          applications,
+          totalCount,
+          page,
+          pageSize,
+          totalPages
+        }
+      };
+    } catch (err: any) {
+      console.error('fetchApplicationsPaginated exception:', err);
+      return {
+        success: false,
+        message: err.message || 'Network error while fetching applications from Supabase'
+      };
+    }
+  }
+
+  // Live database exact counts for the dashboard
+  public async fetchApplicationStats(): Promise<ApplicationStatsResult> {
+    const defaultStats: ApplicationStatsResult = {
+      total: 0,
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+      assigned: 0,
+      checkedIn: 0
+    };
+
+    if (!this.isCloudConnected()) {
+      return defaultStats;
+    }
+
+    try {
+      const [
+        totalRes,
+        pendingRes,
+        approvedRes,
+        rejectedRes,
+        assignedRes,
+        checkedInRes
+      ] = await Promise.all([
+        supabase!.from('applications').select('id', { count: 'exact', head: true }).eq('is_deleted', false),
+        supabase!.from('applications').select('id', { count: 'exact', head: true }).eq('is_deleted', false).eq('status', 'PENDING'),
+        supabase!.from('applications').select('id', { count: 'exact', head: true }).eq('is_deleted', false).eq('status', 'APPROVED'),
+        supabase!.from('applications').select('id', { count: 'exact', head: true }).eq('is_deleted', false).eq('status', 'REJECTED'),
+        supabase!.from('applications').select('id', { count: 'exact', head: true }).eq('is_deleted', false).eq('status', 'APPROVED').not('assigned_event_1', 'is', null).neq('assigned_event_1', ''),
+        supabase!.from('applications').select('id', { count: 'exact', head: true }).eq('is_deleted', false).eq('checked_in', true)
+      ]);
+
+      return {
+        total: totalRes.count ?? 0,
+        pending: pendingRes.count ?? 0,
+        approved: approvedRes.count ?? 0,
+        rejected: rejectedRes.count ?? 0,
+        assigned: assignedRes.count ?? 0,
+        checkedIn: checkedInRes.count ?? 0
+      };
+    } catch (err) {
+      console.error('fetchApplicationStats error:', err);
+      return defaultStats;
+    }
+  }
+
+  // Live newest applications directly from Supabase by timestamp
+  public async fetchRecentApplications(limit = 5): Promise<VolunteerApplication[]> {
+    if (!this.isCloudConnected()) {
+      return [];
+    }
+
+    try {
+      const { data, error } = await supabase!
+        .from('applications')
+        .select('*')
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (!error && data) {
+        return data.map(mapApplicationRow);
+      }
+      return [];
+    } catch (err) {
+      console.error('fetchRecentApplications error:', err);
+      return [];
+    }
+  }
+
+  // Full applications fetch (strictly excluding soft-deleted, never falling back to mock data)
   public async getApplications(): Promise<VolunteerApplication[]> {
     if (this.isCloudConnected()) {
       try {
         const { data, error } = await supabase!
           .from('applications')
           .select('*')
+          .eq('is_deleted', false)
           .order('created_at', { ascending: false });
 
         if (!error && data) {
-          // If the cloud database is completely empty, auto-seed with baseline applications
-          if (data.length === 0) {
-            console.log('Seeding baseline applications to Supabase...');
-            const seedRows = INITIAL_APPLICATIONS.map(toApplicationRow);
-            await supabase!.from('applications').upsert(seedRows, { onConflict: 'id' });
-            return INITIAL_APPLICATIONS;
-          }
-
           const mapped = data.map(mapApplicationRow);
           return mapped;
         }
@@ -399,7 +589,8 @@ class DatabaseService {
       }
     }
 
-    return INITIAL_APPLICATIONS;
+    // Never return mock demo data when cloud is expected
+    return [];
   }
 
   // Live direct query by USN / ID / Volunteer ID (Zero Caching)

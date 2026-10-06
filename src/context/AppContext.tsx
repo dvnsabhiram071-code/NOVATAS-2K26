@@ -15,10 +15,11 @@ import {
   INITIAL_FAQS
 } from '../data/initialData';
 import { adminAuthService } from '../services/adminAuthService';
-import { dbService, DatabaseWriteResult } from '../services/db';
+import { dbService, DatabaseWriteResult, ApplicationStatsResult } from '../services/db';
 
 interface AppContextType {
   applications: VolunteerApplication[];
+  appStats: ApplicationStatsResult;
   events: VolunteerEvent[];
   settings: AdminSettings;
   contacts: ContactPerson[];
@@ -30,6 +31,7 @@ interface AppContextType {
   isCloudConnected: boolean;
   isLoadingData: boolean;
   refreshData: () => Promise<void>;
+  refreshStats: () => Promise<void>;
   
   // Public Modals / Screens
   isRegisterModalOpen: boolean;
@@ -77,7 +79,16 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [applications, setApplications] = useState<VolunteerApplication[]>(INITIAL_APPLICATIONS);
+  // Production single source of truth: Applications start empty until loaded from Supabase
+  const [applications, setApplications] = useState<VolunteerApplication[]>([]);
+  const [appStats, setAppStats] = useState<ApplicationStatsResult>({
+    total: 0,
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    assigned: 0,
+    checkedIn: 0
+  });
   const [events, setEvents] = useState<VolunteerEvent[]>(INITIAL_EVENTS);
   const [settings, setSettings] = useState<AdminSettings>(INITIAL_SETTINGS);
   const [contacts, setContacts] = useState<ContactPerson[]>(INITIAL_CONTACTS);
@@ -94,22 +105,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [statusLookupUSN, setStatusLookupUSN] = useState('');
 
+  // Live Database Statistics Loader (Fast exact counts from PostgreSQL)
+  const refreshStats = async () => {
+    try {
+      const stats = await dbService.fetchApplicationStats();
+      setAppStats(stats);
+    } catch (err) {
+      console.error('Failed to refresh application stats:', err);
+    }
+  };
+
   // Primary Database Loader
   const refreshData = async () => {
     try {
       setIsCloudConnected(dbService.isCloudConnected());
-      const [appsData, eventsData, contactsData, faqsData, settingsData] = await Promise.all([
+      const [appsData, eventsData, contactsData, faqsData, settingsData, statsData] = await Promise.all([
         dbService.getApplications(),
         dbService.getEvents(),
         dbService.getContacts(),
         dbService.getFaqs(),
-        dbService.getSettings()
+        dbService.getSettings(),
+        dbService.fetchApplicationStats()
       ]);
       setApplications(appsData);
       setEvents(eventsData);
       setContacts(contactsData);
       setFaqs(faqsData);
       setSettings(settingsData);
+      setAppStats(statsData);
     } catch (err) {
       console.error('Failed to refresh data from database:', err);
     } finally {
@@ -123,6 +146,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Subscribe to real-time changes from other devices via Supabase Realtime
     const unsubscribe = dbService.subscribeToChanges(() => {
       refreshData();
+      refreshStats();
     });
 
     return () => {
@@ -597,16 +621,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetDemoData = () => {
-    setApplications(INITIAL_APPLICATIONS);
-    setEvents(INITIAL_EVENTS);
-    setSettings(INITIAL_SETTINGS);
-    setContacts(INITIAL_CONTACTS);
-    setFaqs(INITIAL_FAQS);
-    INITIAL_APPLICATIONS.forEach(a => dbService.saveApplication(a));
-    INITIAL_EVENTS.forEach(e => dbService.saveEvent(e));
-    INITIAL_CONTACTS.forEach(c => dbService.saveContact(c));
-    INITIAL_FAQS.forEach(f => dbService.saveFaq(f));
-    dbService.saveSettings(INITIAL_SETTINGS);
+    // PROTECTED: Production safety lock - never overwrite real volunteer applications
+    console.warn('Production safety lock: resetting applications is disabled to protect live database records.');
   };
 
   const saveCloudConfig = async (url: string, key: string) => {
@@ -626,6 +642,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider
       value={{
         applications,
+        appStats,
+        refreshStats,
         events,
         settings,
         contacts,

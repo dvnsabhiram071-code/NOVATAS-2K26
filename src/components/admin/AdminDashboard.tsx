@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, 
   Clock, 
@@ -9,21 +9,50 @@ import {
   ArrowUpRight, 
   Sparkles,
   Calendar,
-  Layers
+  Layers,
+  RefreshCw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { AdminTab } from '../../types';
+import { AdminTab, VolunteerApplication } from '../../types';
+import { dbService } from '../../services/db';
 
 export const AdminDashboard: React.FC<{ onNavigateTab: (tab: AdminTab) => void }> = ({ onNavigateTab }) => {
-  const { applications, events } = useApp();
+  const { applications, events, appStats } = useApp();
 
   const activeApps = applications.filter(a => !a.isDeleted);
-  const total = activeApps.length;
-  const pending = activeApps.filter(a => a.status === 'PENDING').length;
-  const approved = activeApps.filter(a => a.status === 'APPROVED').length;
-  const rejected = activeApps.filter(a => a.status === 'REJECTED').length;
-  const assigned = activeApps.filter(a => a.status === 'APPROVED' && (a.assignedEvent1 || a.assignedEvent2)).length;
-  const checkedIn = activeApps.filter(a => a.checkedIn).length;
+  const [recentApps, setRecentApps] = useState<VolunteerApplication[]>([]);
+  const [isLoadingRecent, setIsLoadingRecent] = useState(true);
+
+  // Exact PostgreSQL database counts from appStats (no client-side truncation)
+  const total = appStats?.total ?? applications.filter(a => !a.isDeleted).length;
+  const pending = appStats?.pending ?? applications.filter(a => !a.isDeleted && a.status === 'PENDING').length;
+  const approved = appStats?.approved ?? applications.filter(a => !a.isDeleted && a.status === 'APPROVED').length;
+  const rejected = appStats?.rejected ?? applications.filter(a => !a.isDeleted && a.status === 'REJECTED').length;
+  const assigned = appStats?.assigned ?? applications.filter(a => !a.isDeleted && a.status === 'APPROVED' && (a.assignedEvent1 || a.assignedEvent2)).length;
+  const checkedIn = appStats?.checkedIn ?? applications.filter(a => !a.isDeleted && a.checkedIn).length;
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadRecent = async () => {
+      setIsLoadingRecent(true);
+      try {
+        const data = await dbService.fetchRecentApplications(5);
+        if (isMounted) {
+          setRecentApps(data);
+        }
+      } catch (err) {
+        console.error('Failed to load recent applications:', err);
+      } finally {
+        if (isMounted) {
+          setIsLoadingRecent(false);
+        }
+      }
+    };
+    loadRecent();
+    return () => {
+      isMounted = false;
+    };
+  }, [appStats]);
 
   const cards = [
     {
@@ -168,43 +197,54 @@ export const AdminDashboard: React.FC<{ onNavigateTab: (tab: AdminTab) => void }
           </div>
 
           <div className="space-y-3">
-            {activeApps.slice(0, 5).map((app) => (
-              <div
-                key={app.id}
-                className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between gap-3 hover:border-slate-700 transition-colors"
-              >
-                <div className="flex items-center space-x-3 min-w-0">
-                  <img
-                    src={app.photoUrl}
-                    alt={app.fullName}
-                    className="w-10 h-10 rounded-xl object-cover border border-slate-700 shrink-0"
-                  />
-                  <div className="min-w-0">
-                    <p className="font-display font-bold text-sm text-white truncate">
-                      {app.fullName}
-                    </p>
-                    <p className="text-xs font-mono text-slate-400">
-                      {app.usn} • Sec {app.section}
+            {isLoadingRecent ? (
+              <div className="py-8 flex flex-col items-center justify-center space-y-2 text-slate-500 font-mono text-xs">
+                <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin" />
+                <span>Loading recent registrations...</span>
+              </div>
+            ) : recentApps.length === 0 ? (
+              <div className="py-8 text-center text-slate-500 font-mono text-xs">
+                No recent applications found in database.
+              </div>
+            ) : (
+              recentApps.map((app) => (
+                <div
+                  key={app.id}
+                  className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between gap-3 hover:border-slate-700 transition-colors"
+                >
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <img
+                      src={app.photoUrl}
+                      alt={app.fullName}
+                      className="w-10 h-10 rounded-xl object-cover border border-slate-700 shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <p className="font-display font-bold text-sm text-white truncate">
+                        {app.fullName}
+                      </p>
+                      <p className="text-xs font-mono text-slate-400">
+                        {app.usn} • Sec {app.section}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                      app.status === 'APPROVED'
+                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        : app.status === 'REJECTED'
+                        ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                        : 'bg-amber-950 text-amber-300 border border-amber-800'
+                    }`}>
+                      {app.status}
+                    </span>
+                    <p className="text-[10px] font-mono text-slate-500 mt-1">
+                      {app.preferences.join(' • ')}
                     </p>
                   </div>
                 </div>
-
-                <div className="text-right shrink-0">
-                  <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
-                    app.status === 'APPROVED'
-                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                      : app.status === 'REJECTED'
-                      ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                      : 'bg-amber-950 text-amber-300 border border-amber-800'
-                  }`}>
-                    {app.status}
-                  </span>
-                  <p className="text-[10px] font-mono text-slate-500 mt-1">
-                    {app.preferences.join(' • ')}
-                  </p>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 

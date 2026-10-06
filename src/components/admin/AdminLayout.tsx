@@ -38,8 +38,10 @@ export const AdminLayout: React.FC<{ onExitAdmin: () => void; initialTab?: Admin
     setActiveAdminTab, 
     setIsAdminLoggedIn, 
     applications,
+    appStats,
     isCloudConnected,
     refreshData,
+    refreshStats,
     isLoadingData
   } = useApp();
 
@@ -47,7 +49,7 @@ export const AdminLayout: React.FC<{ onExitAdmin: () => void; initialTab?: Admin
 
   const handleManualSync = async () => {
     setIsRefreshing(true);
-    await refreshData();
+    await Promise.all([refreshData(), refreshStats()]);
     setTimeout(() => setIsRefreshing(false), 600);
   };
 
@@ -60,7 +62,7 @@ export const AdminLayout: React.FC<{ onExitAdmin: () => void; initialTab?: Admin
     }
   }, [initialTab]);
 
-  const pendingCount = applications.filter(a => !a.isDeleted && a.status === 'PENDING').length;
+  const pendingCount = appStats ? appStats.pending : applications.filter(a => !a.isDeleted && a.status === 'PENDING').length;
 
   const tabs: { id: AdminTab; label: string; icon: React.FC<{ className?: string }>; badge?: number }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },

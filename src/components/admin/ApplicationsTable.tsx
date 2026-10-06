@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Search, 
   Filter, 
@@ -17,10 +17,14 @@ import {
   Users,
   Sparkles,
   ShieldCheck,
-  Plus
+  Plus,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { VolunteerApplication } from '../../types';
+import { dbService } from '../../services/db';
 
 const STANDARD_VOLUNTEER_ROLES = [
   'Event Coordination',
@@ -37,18 +41,32 @@ const STANDARD_VOLUNTEER_ROLES = [
 
 export const ApplicationsTable: React.FC = () => {
   const { 
-    applications, 
     approveApplication, 
     rejectApplication, 
     deleteApplication,
     assignVolunteerEvents,
-    events 
+    events,
+    refreshStats 
   } = useApp();
 
+  // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [sectionFilter, setSectionFilter] = useState('ALL');
   const [preferenceFilter, setPreferenceFilter] = useState('ALL');
+
+  // Server-side Pagination & Data state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [applications, setApplications] = useState<VolunteerApplication[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Request sequencing to prevent race conditions
+  const requestIdRef = useRef(0);
 
   // Modals state
   const [selectedApp, setSelectedApp] = useState<VolunteerApplication | null>(null);
@@ -69,31 +87,59 @@ export const ApplicationsTable: React.FC = () => {
   // Active events for dropdown
   const activeEvents = events.filter(e => e.status === 'ACTIVE');
 
-  // Filtering
-  const activeApps = applications.filter(a => !a.isDeleted);
-  const filteredApps = activeApps.filter(app => {
-    const q = searchQuery.toLowerCase().trim();
-    if (q) {
-      const match = 
-        app.fullName.toLowerCase().includes(q) ||
-        app.usn.toLowerCase().includes(q) ||
-        app.id.toLowerCase().includes(q) ||
-        (app.volunteerId && app.volunteerId.toLowerCase().includes(q)) ||
-        app.mobile.includes(q) ||
-        app.email.toLowerCase().includes(q);
-      if (!match) return false;
-    }
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
-    if (statusFilter !== 'ALL' && app.status !== statusFilter) return false;
-    if (sectionFilter !== 'ALL' && app.section !== sectionFilter) return false;
-    if (preferenceFilter !== 'ALL') {
-      const p1 = app.preference1 || app.preferences[0];
-      const p2 = app.preference2 || app.preferences[1];
-      if (p1 !== preferenceFilter && p2 !== preferenceFilter) return false;
-    }
+  // Primary data fetch from Supabase
+  const loadApplications = useCallback(async () => {
+    const currentReq = ++requestIdRef.current;
+    setIsLoading(true);
+    setErrorMessage(null);
 
-    return true;
-  });
+    try {
+      const res = await dbService.fetchApplicationsPaginated({
+        page,
+        pageSize,
+        search: debouncedSearch.trim(),
+        status: statusFilter !== 'ALL' ? statusFilter : undefined,
+        section: sectionFilter !== 'ALL' ? sectionFilter : undefined,
+        preference: preferenceFilter !== 'ALL' ? preferenceFilter : undefined
+      });
+
+      if (requestIdRef.current !== currentReq) {
+        return; // Discard out-of-order response
+      }
+
+      if (!res.success || !res.data) {
+        setErrorMessage(res.message || 'Unable to retrieve applications from database.');
+        setApplications([]);
+        setTotalCount(0);
+        setTotalPages(1);
+      } else {
+        setApplications(res.data.applications);
+        setTotalCount(res.data.totalCount);
+        setTotalPages(res.data.totalPages);
+      }
+    } catch (err: any) {
+      if (requestIdRef.current === currentReq) {
+        setErrorMessage(err?.message || 'Network error while loading applications.');
+      }
+    } finally {
+      if (requestIdRef.current === currentReq) {
+        setIsLoading(false);
+      }
+    }
+  }, [page, pageSize, debouncedSearch, statusFilter, sectionFilter, preferenceFilter]);
+
+  useEffect(() => {
+    loadApplications();
+  }, [loadApplications]);
 
   const handleOpenView = (app: VolunteerApplication) => {
     setSelectedApp(app);
@@ -129,6 +175,8 @@ export const ApplicationsTable: React.FC = () => {
       setSelectedApp(res.data);
       setSaveSuccessNotice(true);
       setTimeout(() => setSaveSuccessNotice(false), 2500);
+      loadApplications();
+      refreshStats();
     } else {
       alert(`Save failed: ${res.message}`);
     }
@@ -158,6 +206,8 @@ export const ApplicationsTable: React.FC = () => {
     if (res.success && res.data) {
       setIsApproveConfirmOpen(false);
       setSelectedApp(res.data);
+      loadApplications();
+      refreshStats();
     } else {
       alert(`Approval failed: ${res.message}`);
     }
@@ -177,6 +227,8 @@ export const ApplicationsTable: React.FC = () => {
       if (selectedApp && selectedApp.id === targetAppId) {
         setSelectedApp(res.data);
       }
+      loadApplications();
+      refreshStats();
     } else {
       alert(`Rejection failed: ${res.message}`);
     }
@@ -192,10 +244,16 @@ export const ApplicationsTable: React.FC = () => {
     if (res.success) {
       setIsDeleteConfirmOpen(false);
       setIsViewModalOpen(false);
+      loadApplications();
+      refreshStats();
     } else {
       alert(`Delete failed: ${res.message}`);
     }
   };
+
+  // Pagination calculations
+  const fromRecord = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
+  const toRecord = Math.min(page * pageSize, totalCount);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -207,7 +265,7 @@ export const ApplicationsTable: React.FC = () => {
             APPLICATIONS MANAGEMENT
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Review event preferences, assign official events & roles, and approve volunteer badges.
+            Single Source of Truth: Supabase <code className="text-cyan-400 bg-slate-900 px-1 py-0.5 rounded">public.applications</code>
           </p>
         </div>
 
@@ -216,7 +274,7 @@ export const ApplicationsTable: React.FC = () => {
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by Name, USN, Mobile, ID..."
+            placeholder="Search Name, USN, Mobile, ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400 transition-colors"
@@ -234,7 +292,10 @@ export const ApplicationsTable: React.FC = () => {
         {/* Status Filter */}
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
           className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-xl px-3 py-1.5 focus:outline-none focus:border-cyan-400 cursor-pointer"
         >
           <option value="ALL">Status: All</option>
@@ -246,7 +307,10 @@ export const ApplicationsTable: React.FC = () => {
         {/* Section Filter */}
         <select
           value={sectionFilter}
-          onChange={(e) => setSectionFilter(e.target.value)}
+          onChange={(e) => {
+            setSectionFilter(e.target.value);
+            setPage(1);
+          }}
           className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-xl px-3 py-1.5 focus:outline-none focus:border-cyan-400 cursor-pointer"
         >
           <option value="ALL">Section: All</option>
@@ -258,7 +322,10 @@ export const ApplicationsTable: React.FC = () => {
         {/* Event Preference Filter */}
         <select
           value={preferenceFilter}
-          onChange={(e) => setPreferenceFilter(e.target.value)}
+          onChange={(e) => {
+            setPreferenceFilter(e.target.value);
+            setPage(1);
+          }}
           className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-xl px-3 py-1.5 focus:outline-none focus:border-cyan-400 cursor-pointer"
         >
           <option value="ALL">Preference: All Events</option>
@@ -267,13 +334,30 @@ export const ApplicationsTable: React.FC = () => {
           ))}
         </select>
 
-        <span className="text-xs text-slate-500 font-mono ml-auto">
-          Showing {filteredApps.length} applications
+        {/* Refresh Button */}
+        <button
+          onClick={() => {
+            loadApplications();
+            refreshStats();
+          }}
+          disabled={isLoading}
+          title="Refresh from Supabase"
+          className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-cyan-400' : ''}`} />
+        </button>
+
+        <span className="text-xs text-slate-400 font-mono ml-auto">
+          {isLoading ? (
+            <span className="text-cyan-400 animate-pulse">Syncing database...</span>
+          ) : (
+            `Showing ${fromRecord}–${toRecord} of ${totalCount.toLocaleString()} applications`
+          )}
         </span>
       </div>
 
       {/* ========================================================================= */}
-      {/* 12. ADMIN APPLICATION TABLE (Exact Columns Specified in Section 12) */}
+      {/* 12. ADMIN APPLICATION TABLE */}
       {/* ========================================================================= */}
       <div className="glass-panel rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
         <div className="overflow-x-auto">
@@ -291,14 +375,70 @@ export const ApplicationsTable: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
-              {filteredApps.length === 0 ? (
+              {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-500">
-                    No applications matching current filters.
+                  <td colSpan={8} className="py-16 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-3">
+                      <RefreshCw className="w-7 h-7 text-cyan-400 animate-spin" />
+                      <span className="font-mono text-xs uppercase tracking-wider text-cyan-300 font-bold">
+                        LOADING APPLICATIONS...
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        Querying Supabase public.applications (Page {page} of {totalPages})
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ) : errorMessage ? (
+                <tr>
+                  <td colSpan={8} className="py-12 px-6 text-center">
+                    <div className="max-w-md mx-auto p-5 rounded-2xl bg-rose-950/40 border border-rose-500/40 space-y-3">
+                      <div className="flex items-center justify-center space-x-2 text-rose-400">
+                        <AlertTriangle className="w-5 h-5" />
+                        <span className="font-bold text-sm uppercase font-mono">UNABLE TO LOAD APPLICATIONS</span>
+                      </div>
+                      <p className="text-xs text-rose-300 font-mono break-words">
+                        {errorMessage}
+                      </p>
+                      <button
+                        onClick={() => loadApplications()}
+                        className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-mono font-bold uppercase transition-all shadow-md cursor-pointer"
+                      >
+                        RETRY DATABASE QUERY
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : applications.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-16 text-center text-slate-500">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <Users className="w-8 h-8 text-slate-600" />
+                      <span className="text-sm font-bold text-slate-400">NO APPLICATIONS FOUND</span>
+                      <span className="text-xs text-slate-500">
+                        {searchQuery || statusFilter !== 'ALL' || sectionFilter !== 'ALL' || preferenceFilter !== 'ALL'
+                          ? 'No applications match the current filter criteria.'
+                          : 'The database currently contains no non-deleted records.'}
+                      </span>
+                      {(searchQuery || statusFilter !== 'ALL' || sectionFilter !== 'ALL' || preferenceFilter !== 'ALL') && (
+                        <button
+                          onClick={() => {
+                            setSearchQuery('');
+                            setStatusFilter('ALL');
+                            setSectionFilter('ALL');
+                            setPreferenceFilter('ALL');
+                            setPage(1);
+                          }}
+                          className="mt-2 text-xs text-cyan-400 hover:underline cursor-pointer"
+                        >
+                          Clear all filters
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (
-                filteredApps.map((app) => (
+                applications.map((app) => (
                   <tr 
                     key={app.id} 
                     className="hover:bg-slate-900/40 transition-colors group"
@@ -390,6 +530,101 @@ export const ApplicationsTable: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Pagination Controls */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 glass-panel p-4 rounded-2xl border border-slate-800">
+        <div className="flex items-center space-x-3 text-xs font-mono text-slate-400">
+          <span>Per page:</span>
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(1);
+            }}
+            className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-lg px-2.5 py-1 focus:outline-none focus:border-cyan-400 cursor-pointer"
+          >
+            <option value={25}>25 / page</option>
+            <option value={50}>50 / page</option>
+            <option value={100}>100 / page</option>
+          </select>
+          <span className="hidden md:inline text-slate-600">•</span>
+          <span className="hidden md:inline text-slate-400">
+            Page {page} of {totalPages}
+          </span>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+            disabled={page <= 1 || isLoading}
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed text-xs font-mono transition-colors cursor-pointer"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+            <span>PREV</span>
+          </button>
+
+          <div className="flex items-center space-x-1">
+            {(() => {
+              const pages: (number | string)[] = [];
+              const maxButtons = 5;
+              if (totalPages <= maxButtons + 2) {
+                for (let i = 1; i <= totalPages; i++) pages.push(i);
+              } else {
+                pages.push(1);
+                let start = Math.max(2, page - 1);
+                let end = Math.min(totalPages - 1, page + 1);
+
+                if (page <= 3) {
+                  start = 2;
+                  end = 4;
+                } else if (page >= totalPages - 2) {
+                  start = totalPages - 3;
+                  end = totalPages - 1;
+                }
+
+                if (start > 2) pages.push('...');
+                for (let i = start; i <= end; i++) pages.push(i);
+                if (end < totalPages - 1) pages.push('...');
+                pages.push(totalPages);
+              }
+
+              return pages.map((p, idx) => {
+                if (typeof p === 'string') {
+                  return (
+                    <span key={`ellipsis-${idx}`} className="px-2 text-xs font-mono text-slate-600">
+                      ...
+                    </span>
+                  );
+                }
+                const isActive = p === page;
+                return (
+                  <button
+                    key={p}
+                    onClick={() => setPage(p)}
+                    disabled={isLoading}
+                    className={`w-8 h-8 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-cyan-500 text-black shadow-md shadow-cyan-500/20'
+                        : 'bg-slate-900 border border-slate-800 text-slate-300 hover:border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                );
+              });
+            })()}
+          </div>
+
+          <button
+            onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+            disabled={page >= totalPages || isLoading}
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed text-xs font-mono transition-colors cursor-pointer"
+          >
+            <span>NEXT</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
