@@ -310,6 +310,34 @@ export function toApplicationRow(app: VolunteerApplication) {
   };
 }
 
+export const APPLICATION_LIST_COLUMNS = [
+  'id',
+  'application_id',
+  'full_name',
+  'usn',
+  'department',
+  'section',
+  'mobile',
+  'email',
+  'preference1',
+  'preference2',
+  'status',
+  'rejection_reason',
+  'assigned_event_1',
+  'assigned_event_2',
+  'assigned_category',
+  'volunteer_role',
+  'volunteer_id',
+  'qr_token',
+  'approved_at',
+  'submitted_at',
+  'created_at',
+  'updated_at',
+  'checked_in',
+  'checked_in_at',
+  'is_deleted'
+].join(',');
+
 class DatabaseService {
   public isCloudConnected(): boolean {
     return supabase !== null && Boolean(activeConfig.url && activeConfig.key);
@@ -418,14 +446,15 @@ class DatabaseService {
       const from = (page - 1) * pageSize;
       const to = from + pageSize - 1;
 
+      // Select lightweight columns only (photo_url excluded to eliminate statement timeouts)
       let query = supabase!
         .from('applications')
-        .select('*', { count: 'exact' })
+        .select(APPLICATION_LIST_COLUMNS, { count: 'exact' })
         .eq('is_deleted', false);
 
       // Search across multiple fields directly in PostgreSQL
       if (params.search && params.search.trim()) {
-        const cleanQ = params.search.trim().replace(/[%_]/g, '');
+        const cleanQ = params.search.trim().replace(/[%_'"\\]/g, '');
         if (cleanQ) {
           query = query.or(
             `full_name.ilike.%${cleanQ}%,usn.ilike.%${cleanQ}%,mobile.ilike.%${cleanQ}%,email.ilike.%${cleanQ}%,id.ilike.%${cleanQ}%,volunteer_id.ilike.%${cleanQ}%`
@@ -543,7 +572,25 @@ class DatabaseService {
     }
   }
 
-  // Live newest applications directly from Supabase by timestamp
+  // Fetch photo_url on-demand for a single application when viewing details
+  public async fetchApplicationPhoto(id: string): Promise<string | null> {
+    if (!this.isCloudConnected() || !id) return null;
+    try {
+      const { data, error } = await supabase!
+        .from('applications')
+        .select('photo_url')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return data.photo_url || null;
+    } catch (err) {
+      console.error('fetchApplicationPhoto error:', err);
+      return null;
+    }
+  }
+
+  // Live newest applications directly from Supabase by timestamp (lightweight, no photo_url)
   public async fetchRecentApplications(limit = 5): Promise<VolunteerApplication[]> {
     if (!this.isCloudConnected()) {
       return [];
@@ -552,7 +599,7 @@ class DatabaseService {
     try {
       const { data, error } = await supabase!
         .from('applications')
-        .select('*')
+        .select(APPLICATION_LIST_COLUMNS)
         .eq('is_deleted', false)
         .order('created_at', { ascending: false })
         .limit(limit);

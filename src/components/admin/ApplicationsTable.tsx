@@ -70,6 +70,8 @@ export const ApplicationsTable: React.FC = () => {
 
   // Modals state
   const [selectedApp, setSelectedApp] = useState<VolunteerApplication | null>(null);
+  const [modalPhoto, setModalPhoto] = useState<string>('');
+  const [isLoadingPhoto, setIsLoadingPhoto] = useState<boolean>(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
@@ -141,9 +143,10 @@ export const ApplicationsTable: React.FC = () => {
     loadApplications();
   }, [loadApplications]);
 
-  const handleOpenView = (app: VolunteerApplication) => {
+  const handleOpenView = async (app: VolunteerApplication) => {
     setSelectedApp(app);
     setAssignedEventInput(app.assignedEvent1 || '');
+    setModalPhoto(app.photoUrl || '');
     
     const existingRole = app.volunteerRole || '';
     if (existingRole && !STANDARD_VOLUNTEER_ROLES.includes(existingRole)) {
@@ -158,6 +161,21 @@ export const ApplicationsTable: React.FC = () => {
 
     setSaveSuccessNotice(false);
     setIsViewModalOpen(true);
+
+    // On-demand fetch of applicant photo (avoids downloading heavy Base64 strings in list query)
+    if (!app.photoUrl) {
+      setIsLoadingPhoto(true);
+      try {
+        const photo = await dbService.fetchApplicationPhoto(app.id);
+        if (photo) {
+          setModalPhoto(photo);
+        }
+      } catch (err) {
+        console.error('Failed to load application photo:', err);
+      } finally {
+        setIsLoadingPhoto(false);
+      }
+    }
   };
 
   const getEffectiveRole = () => {
@@ -445,12 +463,18 @@ export const ApplicationsTable: React.FC = () => {
                   >
                     {/* PHOTO */}
                     <td className="py-3 px-4">
-                      <div className="w-10 h-10 rounded-xl overflow-hidden border border-slate-700 bg-slate-950">
-                        <img
-                          src={app.photoUrl}
-                          alt={app.fullName}
-                          className="w-full h-full object-cover"
-                        />
+                      <div className="w-10 h-10 rounded-xl overflow-hidden border border-slate-700 bg-slate-950 flex items-center justify-center">
+                        {app.photoUrl ? (
+                          <img
+                            src={app.photoUrl}
+                            alt={app.fullName}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <span className="text-[11px] font-mono font-bold text-cyan-300 bg-gradient-to-br from-slate-800 to-slate-900 w-full h-full flex items-center justify-center">
+                            {app.fullName ? app.fullName.split(' ').map(n => n[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() : 'NV'}
+                          </span>
+                        )}
                       </div>
                     </td>
 
@@ -661,8 +685,19 @@ export const ApplicationsTable: React.FC = () => {
                   PERSONAL INFORMATION
                 </span>
                 <div className="flex items-center space-x-4 p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
-                  <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-cyan-400 shrink-0 bg-slate-950">
-                    <img src={selectedApp.photoUrl} alt={selectedApp.fullName} className="w-full h-full object-cover" />
+                  <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-cyan-400 shrink-0 bg-slate-950 flex items-center justify-center">
+                    {isLoadingPhoto ? (
+                      <div className="flex flex-col items-center justify-center text-[10px] text-cyan-400 font-mono">
+                        <RefreshCw className="w-5 h-5 animate-spin mb-1" />
+                        <span>Loading...</span>
+                      </div>
+                    ) : modalPhoto ? (
+                      <img src={modalPhoto} alt={selectedApp.fullName} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full bg-slate-900 flex items-center justify-center font-mono font-bold text-cyan-300 text-lg">
+                        {selectedApp.fullName ? selectedApp.fullName.split(' ').map(n => n[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() : 'NV'}
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-1">
                     <p className="font-mono text-xs text-cyan-400 font-bold">{selectedApp.id}</p>
