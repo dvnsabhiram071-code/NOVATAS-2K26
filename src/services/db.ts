@@ -635,7 +635,7 @@ class DatabaseService {
       try {
         const { data, error } = await supabase!
           .from('applications')
-          .select('*')
+          .select(APPLICATION_LIST_COLUMNS)
           .eq('is_deleted', false)
           .order('created_at', { ascending: false });
 
@@ -662,31 +662,41 @@ class DatabaseService {
 
     if (this.isCloudConnected()) {
       try {
-        // First try exact or case-insensitive query
-        const { data, error } = await supabase!
+        const clean = q.replace(/[%_'"\\]/g, '');
+        const cleanNoHyphen = clean.replace(/[\s-]/g, '');
+
+        const orFilters: string[] = [
+          `usn.ilike.${clean}`,
+          `volunteer_id.ilike.${clean}`,
+          `id.ilike.${clean}`,
+          `application_id.ilike.${clean}`
+        ];
+
+        if (clean === 'KUB25CSE502' || clean === 'KUB25CSE052') {
+          orFilters.push('usn.ilike.KUB25CSE052', 'usn.ilike.KUB25CSE502', 'id.eq.NOV26-00492');
+        }
+
+        let { data, error } = await supabase!
           .from('applications')
           .select('*')
-          .eq('is_deleted', false);
+          .eq('is_deleted', false)
+          .or(orFilters.join(','))
+          .limit(1);
+
+        if (!error && (!data || data.length === 0) && cleanNoHyphen !== clean && cleanNoHyphen.length > 3) {
+          const res2 = await supabase!
+            .from('applications')
+            .select('*')
+            .eq('is_deleted', false)
+            .or(`usn.ilike.%${cleanNoHyphen}%,volunteer_id.ilike.%${cleanNoHyphen}%`)
+            .limit(1);
+          if (!res2.error && res2.data && res2.data.length > 0) {
+            data = res2.data;
+          }
+        }
 
         if (!error && data && data.length > 0) {
-          const match = data.find((r: any) => {
-            const rowUsn = (r.usn || '').trim().toUpperCase();
-            const rowVolId = (r.volunteer_id || '').trim().toUpperCase();
-            const rowId = (r.id || '').trim().toUpperCase();
-
-            // Direct matches
-            if (rowUsn === q || rowVolId === q || rowId === q) return true;
-
-            // Handle KUB25CSE502 vs KUB25CSE052 alias
-            if (q === 'KUB25CSE502' && (rowUsn === 'KUB25CSE052' || rowUsn === 'KUB25CSE502' || rowId === 'NOV26-00492')) return true;
-            if (q === 'KUB25CSE052' && (rowUsn === 'KUB25CSE052' || rowUsn === 'KUB25CSE502' || rowId === 'NOV26-00492')) return true;
-
-            return false;
-          });
-
-          if (match) {
-            return mapApplicationRow(match);
-          }
+          return mapApplicationRow(data[0]);
         }
       } catch (err) {
         console.error('fetchApplicationByUSN error:', err);
@@ -714,10 +724,38 @@ class DatabaseService {
 
     if (this.isCloudConnected()) {
       try {
-        const { data, error } = await supabase!
+        const clean = q.replace(/[%_'"\\]/g, '');
+        const cleanNoHyphen = clean.replace(/[\s-]/g, '');
+
+        const orFilters: string[] = [
+          `usn.ilike.${clean}`,
+          `volunteer_id.ilike.${clean}`,
+          `id.ilike.${clean}`,
+          `application_id.ilike.${clean}`
+        ];
+
+        if (clean === 'KUB25CSE502' || clean === 'KUB25CSE052') {
+          orFilters.push('usn.ilike.KUB25CSE052', 'usn.ilike.KUB25CSE502', 'id.eq.NOV26-00492');
+        }
+
+        let { data, error } = await supabase!
           .from('applications')
           .select('*')
-          .eq('is_deleted', false);
+          .eq('is_deleted', false)
+          .or(orFilters.join(','))
+          .limit(1);
+
+        if (!error && (!data || data.length === 0) && cleanNoHyphen !== clean && cleanNoHyphen.length > 3) {
+          const res2 = await supabase!
+            .from('applications')
+            .select('*')
+            .eq('is_deleted', false)
+            .or(`usn.ilike.%${cleanNoHyphen}%,volunteer_id.ilike.%${cleanNoHyphen}%`)
+            .limit(1);
+          if (!res2.error && res2.data && res2.data.length > 0) {
+            data = res2.data;
+          }
+        }
 
         if (error) {
           console.error('fetchApprovedVolunteerForCard Supabase error:', error.message);
@@ -725,51 +763,30 @@ class DatabaseService {
         }
 
         if (data && data.length > 0) {
-          const match = data.find((r: any) => {
-            const rowUsn = (r.usn || '').trim().toUpperCase();
-            const rowVolId = (r.volunteer_id || '').trim().toUpperCase();
-            const rowId = (r.id || '').trim().toUpperCase();
+          const match = data[0];
+          const vol = mapApplicationRow(match);
 
-            // Direct comparison
-            if (rowUsn === q || rowVolId === q || rowId === q) return true;
+          if (vol.status === 'PENDING') {
+            return { status: 'PENDING', volunteer: vol };
+          }
 
-            // Normalized comparison (ignoring dashes and spaces)
-            const cleanQ = q.replace(/[\s-]/g, '');
-            if (rowVolId.replace(/[\s-]/g, '') === cleanQ && cleanQ.length > 3) return true;
-            if (rowUsn.replace(/[\s-]/g, '') === cleanQ && cleanQ.length > 3) return true;
+          if (vol.status === 'REJECTED') {
+            return { status: 'REJECTED', volunteer: vol };
+          }
 
-            // Aliases
-            if (q === 'KUB25CSE502' && (rowUsn === 'KUB25CSE052' || rowUsn === 'KUB25CSE502' || rowId === 'NOV26-00492')) return true;
-            if (q === 'KUB25CSE052' && (rowUsn === 'KUB25CSE052' || rowUsn === 'KUB25CSE502' || rowId === 'NOV26-00492')) return true;
+          if (vol.status === 'APPROVED') {
+            const hasVolId = Boolean(vol.volunteerId && vol.volunteerId.trim());
+            const hasEvent = Boolean(vol.assignedEvent1 && vol.assignedEvent1.trim() && vol.assignedEvent1.trim() !== 'Pending');
+            const hasRole = Boolean(vol.volunteerRole && vol.volunteerRole.trim() && vol.volunteerRole.trim() !== 'Pending');
 
-            return false;
-          });
-
-          if (match) {
-            const vol = mapApplicationRow(match);
-
-            if (vol.status === 'PENDING') {
-              return { status: 'PENDING', volunteer: vol };
-            }
-
-            if (vol.status === 'REJECTED') {
-              return { status: 'REJECTED', volunteer: vol };
-            }
-
-            if (vol.status === 'APPROVED') {
-              const hasVolId = Boolean(vol.volunteerId && vol.volunteerId.trim());
-              const hasEvent = Boolean(vol.assignedEvent1 && vol.assignedEvent1.trim() && vol.assignedEvent1.trim() !== 'Pending');
-              const hasRole = Boolean(vol.volunteerRole && vol.volunteerRole.trim() && vol.volunteerRole.trim() !== 'Pending');
-
-              if (hasVolId && hasEvent && hasRole) {
-                return { status: 'APPROVED', volunteer: vol };
-              } else {
-                return {
-                  status: 'UNASSIGNED',
-                  volunteer: vol,
-                  message: 'Your volunteer application is approved, but your final assigned event or role is currently being finalized by administrators.'
-                };
-              }
+            if (hasVolId && hasEvent && hasRole) {
+              return { status: 'APPROVED', volunteer: vol };
+            } else {
+              return {
+                status: 'UNASSIGNED',
+                volunteer: vol,
+                message: 'Your volunteer application is approved, but your final assigned event or role is currently being finalized by administrators.'
+              };
             }
           }
         }
@@ -830,54 +847,72 @@ class DatabaseService {
 
     if (this.isCloudConnected()) {
       try {
-        const { data, error } = await supabase!
-          .from('applications')
-          .select('*')
-          .eq('is_deleted', false);
-
-        if (!error && data && data.length > 0) {
-          let matchedRow: any = null;
-          const matchedFieldsSet = new Set<'USN' | 'MOBILE' | 'EMAIL'>();
-
-          for (const row of data) {
-            const rowUsn = normalizeUSN(row.usn);
-            const rowEmail = normalizeEmail(row.email);
-            const rowMobile = normalizeMobile(row.mobile);
-
-            let rowMatched = false;
-
-            // Check USN
-            if (cleanUsn && (rowUsn === cleanUsn || (cleanUsn === 'KUB25CSE502' && rowUsn === 'KUB25CSE052') || (cleanUsn === 'KUB25CSE052' && rowUsn === 'KUB25CSE502'))) {
-              matchedFieldsSet.add('USN');
-              rowMatched = true;
-            }
-
-            // Check Mobile (match canonical 10-digit number)
-            if (cleanMobile && cleanMobile.length >= 10 && rowMobile.length >= 10 && rowMobile.slice(-10) === cleanMobile.slice(-10)) {
-              matchedFieldsSet.add('MOBILE');
-              rowMatched = true;
-            }
-
-            // Check Email
-            if (cleanEmail && rowEmail === cleanEmail) {
-              matchedFieldsSet.add('EMAIL');
-              rowMatched = true;
-            }
-
-            if (rowMatched && !matchedRow) {
-              matchedRow = row;
-            }
+        const filters: string[] = [];
+        if (cleanUsn) {
+          filters.push(`usn.ilike.${cleanUsn}`);
+          if (cleanUsn === 'KUB25CSE502' || cleanUsn === 'KUB25CSE052') {
+            filters.push('usn.ilike.KUB25CSE052', 'usn.ilike.KUB25CSE502');
           }
+        }
+        if (cleanEmail) {
+          filters.push(`email.ilike.${cleanEmail}`);
+        }
+        if (cleanMobile && cleanMobile.length >= 10) {
+          const last10 = cleanMobile.slice(-10);
+          filters.push(`mobile.ilike.%${last10}%`);
+        }
 
-          if (matchedRow) {
-            const matchedFields = Array.from(matchedFieldsSet);
-            const desc = matchedFields.join(' & ');
-            return {
-              isDuplicate: true,
-              existingApplication: mapApplicationRow(matchedRow),
-              matchedFields,
-              matchedFieldDescription: desc,
-            };
+        if (filters.length > 0) {
+          const { data, error } = await supabase!
+            .from('applications')
+            .select('id,application_id,full_name,usn,mobile,email,status,volunteer_id')
+            .eq('is_deleted', false)
+            .or(filters.join(','));
+
+          if (!error && data && data.length > 0) {
+            let matchedRow: any = null;
+            const matchedFieldsSet = new Set<'USN' | 'MOBILE' | 'EMAIL'>();
+
+            for (const row of data) {
+              const rowUsn = normalizeUSN(row.usn);
+              const rowEmail = normalizeEmail(row.email);
+              const rowMobile = normalizeMobile(row.mobile);
+
+              let rowMatched = false;
+
+              // Check USN
+              if (cleanUsn && (rowUsn === cleanUsn || (cleanUsn === 'KUB25CSE502' && rowUsn === 'KUB25CSE052') || (cleanUsn === 'KUB25CSE052' && rowUsn === 'KUB25CSE502'))) {
+                matchedFieldsSet.add('USN');
+                rowMatched = true;
+              }
+
+              // Check Mobile (match canonical 10-digit number)
+              if (cleanMobile && cleanMobile.length >= 10 && rowMobile.length >= 10 && rowMobile.slice(-10) === cleanMobile.slice(-10)) {
+                matchedFieldsSet.add('MOBILE');
+                rowMatched = true;
+              }
+
+              // Check Email
+              if (cleanEmail && rowEmail === cleanEmail) {
+                matchedFieldsSet.add('EMAIL');
+                rowMatched = true;
+              }
+
+              if (rowMatched && !matchedRow) {
+                matchedRow = row;
+              }
+            }
+
+            if (matchedRow) {
+              const matchedFields = Array.from(matchedFieldsSet);
+              const desc = matchedFields.join(' & ');
+              return {
+                isDuplicate: true,
+                existingApplication: mapApplicationRow(matchedRow),
+                matchedFields,
+                matchedFieldDescription: desc,
+              };
+            }
           }
         }
       } catch (err) {
@@ -949,7 +984,7 @@ class DatabaseService {
 
   // Live direct query for gate accreditation verify token
   public async verifyVolunteerToken(tokenOrQuery: string): Promise<VolunteerApplication | null> {
-    const clean = tokenOrQuery.toUpperCase().replace('/VERIFY/', '').replace('#/VERIFY/', '').trim();
+    const clean = tokenOrQuery.toUpperCase().replace('/VERIFY/', '').replace('#/VERIFY/', '').trim().replace(/[%_'"\\]/g, '');
     if (!clean) return null;
 
     if (this.isCloudConnected()) {
@@ -957,16 +992,12 @@ class DatabaseService {
         const { data, error } = await supabase!
           .from('applications')
           .select('*')
-          .eq('is_deleted', false);
+          .eq('is_deleted', false)
+          .or(`volunteer_id.ilike.%${clean}%,qr_token.ilike.%${clean}%,usn.ilike.%${clean}%,id.ilike.%${clean}%`)
+          .limit(1);
 
-        if (!error && data) {
-          const match = data.find((r: any) => {
-            const vId = (r.volunteer_id || '').toUpperCase();
-            const token = (r.qr_token || '').toUpperCase();
-            const usn = (r.usn || '').toUpperCase();
-            return (vId && clean.includes(vId)) || (token && clean.includes(token)) || (usn && clean.includes(usn));
-          });
-          if (match) return mapApplicationRow(match);
+        if (!error && data && data.length > 0) {
+          return mapApplicationRow(data[0]);
         }
       } catch (err) {
         console.error('verifyVolunteerToken error:', err);
