@@ -101,6 +101,16 @@ export const Navbar: React.FC<NavbarProps> = ({ onReplayIntro }) => {
             <RotateCcw className="w-4 h-4" />
           </button>
 
+          {/* Admin Panel Entry */}
+          <a
+            href="#/admin"
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold tracking-wide text-amber-300 hover:text-amber-200 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/30 rounded-xl transition-all shadow-sm"
+            title="Organizer & Committee Admin Panel"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+            <span>ADMIN</span>
+          </a>
+
           {/* Check Status Button */}
           <button
             onClick={() => setIsStatusModalOpen(true)}
@@ -185,6 +195,15 @@ export const Navbar: React.FC<NavbarProps> = ({ onReplayIntro }) => {
             >
               CHECK APPLICATION STATUS
             </button>
+
+            <a
+              href="#/admin"
+              onClick={() => setMobileMenuOpen(false)}
+              className="w-full py-2.5 text-center text-xs font-semibold tracking-wider text-amber-300 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/40 rounded-xl flex items-center justify-center space-x-1.5"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+              <span>ADMIN PORTAL</span>
+            </a>
 
             <div className="flex items-center justify-start pt-2">
               <button

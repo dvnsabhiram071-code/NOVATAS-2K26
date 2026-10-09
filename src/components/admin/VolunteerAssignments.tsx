@@ -27,10 +27,15 @@ export const VolunteerAssignments: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkSuccessMsg, setBulkSuccessMsg] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
+  const [statusTab, setStatusTab] = useState<'ALL' | 'PENDING' | 'APPROVED'>('ALL');
 
-  const approvedVolunteers = applications.filter(a => !a.isDeleted && a.status === 'APPROVED');
+  const visibleVolunteers = applications.filter(a => {
+    if (a.isDeleted) return false;
+    if (statusTab === 'ALL') return true;
+    return a.status === statusTab;
+  });
 
-  const filteredVolunteers = approvedVolunteers.filter(vol => {
+  const filteredVolunteers = visibleVolunteers.filter(vol => {
     if (!searchFilter.trim()) return true;
     const q = searchFilter.toLowerCase();
     return (
@@ -175,10 +180,10 @@ export const VolunteerAssignments: React.FC = () => {
         
         {/* Table Controls */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-          <div className="flex items-center space-x-3">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={selectAll}
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-300 rounded-xl font-mono"
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-300 rounded-xl font-mono cursor-pointer"
             >
               {selectedIds.length === filteredVolunteers.length && filteredVolunteers.length > 0 ? (
                 <CheckSquare className="w-4 h-4 text-cyan-400" />
@@ -187,8 +192,27 @@ export const VolunteerAssignments: React.FC = () => {
               )}
               <span>{selectedIds.length === filteredVolunteers.length && filteredVolunteers.length > 0 ? 'DESELECT ALL' : 'SELECT ALL'}</span>
             </button>
-            <span className="text-xs font-mono text-slate-400">
-              {selectedIds.length} selected of {filteredVolunteers.length} approved
+
+            {/* Filter Tabs */}
+            <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-0.5 text-xs font-mono">
+              {(['ALL', 'PENDING', 'APPROVED'] as const).map(tab => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setStatusTab(tab)}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                    statusTab === tab 
+                      ? 'bg-cyan-500 text-black font-bold' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            <span className="text-xs font-mono text-slate-400 ml-1">
+              {selectedIds.length} selected of {filteredVolunteers.length}
             </span>
           </div>
 

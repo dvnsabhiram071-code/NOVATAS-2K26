@@ -131,6 +131,11 @@ export const Footer: React.FC = () => {
               <li>
                 <a href="#contact" className="hover:text-cyan-400 transition-colors">Contact Organizers</a>
               </li>
+              <li className="pt-2 border-t border-slate-900">
+                <a href="#/admin" className="text-amber-400/90 hover:text-amber-300 transition-colors font-mono font-semibold flex items-center space-x-1">
+                  <span>🔒 Admin Portal</span>
+                </a>
+              </li>
             </ul>
           </div>
 

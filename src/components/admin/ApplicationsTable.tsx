@@ -78,6 +78,8 @@ export const ApplicationsTable: React.FC = () => {
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [targetAppId, setTargetAppId] = useState<string>('');
   const [rejectionReasonInput, setRejectionReasonInput] = useState('');
+  const [isApproving, setIsApproving] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   // Assignment form state inside details modal
   const [assignedEventInput, setAssignedEventInput] = useState('');
@@ -145,10 +147,11 @@ export const ApplicationsTable: React.FC = () => {
 
   const handleOpenView = async (app: VolunteerApplication) => {
     setSelectedApp(app);
-    setAssignedEventInput(app.assignedEvent1 || '');
+    const defaultEvent = app.assignedEvent1 || app.preference1 || (app.preferences && app.preferences[0]) || (activeEvents[0]?.name || '');
+    setAssignedEventInput(defaultEvent);
     setModalPhoto(app.photoUrl || '');
     
-    const existingRole = app.volunteerRole || '';
+    const existingRole = app.volunteerRole || 'Event Coordination';
     if (existingRole && !STANDARD_VOLUNTEER_ROLES.includes(existingRole)) {
       setIsCustomRole(true);
       setCustomRoleInput(existingRole);
@@ -203,13 +206,12 @@ export const ApplicationsTable: React.FC = () => {
   // Open Approval Confirmation
   const handleOpenApproveModal = () => {
     if (!selectedApp) return;
-    const finalEvent = assignedEventInput.trim();
-    const finalRole = getEffectiveRole();
+    setApprovalError(null);
+    const finalEvent = assignedEventInput.trim() || selectedApp.assignedEvent1 || selectedApp.preference1 || (selectedApp.preferences && selectedApp.preferences[0]) || (activeEvents[0]?.name || 'General Coordination');
+    const finalRole = getEffectiveRole() || selectedApp.volunteerRole || 'Event Coordination';
 
-    if (!finalEvent || !finalRole) {
-      alert('Please assign both a Final Event and a Volunteer Role before approving.');
-      return;
-    }
+    setAssignedEventInput(finalEvent);
+    if (!assignedRoleInput) setAssignedRoleInput(finalRole);
 
     setTargetAppId(selectedApp.id);
     setIsApproveConfirmOpen(true);
@@ -217,17 +219,27 @@ export const ApplicationsTable: React.FC = () => {
 
   // Confirm Approval (Strict State Machine Execution)
   const handleConfirmApprove = async () => {
-    const finalEvent = assignedEventInput.trim();
-    const finalRole = getEffectiveRole();
+    if (!selectedApp) return;
+    setIsApproving(true);
+    setApprovalError(null);
 
-    const res = await approveApplication(targetAppId, finalEvent, finalRole);
-    if (res.success && res.data) {
-      setIsApproveConfirmOpen(false);
-      setSelectedApp(res.data);
-      loadApplications();
-      refreshStats();
-    } else {
-      alert(`Approval failed: ${res.message}`);
+    const finalEvent = assignedEventInput.trim() || selectedApp.assignedEvent1 || selectedApp.preference1 || (selectedApp.preferences && selectedApp.preferences[0]) || (activeEvents[0]?.name || 'General Coordination');
+    const finalRole = getEffectiveRole() || selectedApp.volunteerRole || 'Event Coordination';
+
+    try {
+      const res = await approveApplication(selectedApp, finalEvent, finalRole);
+      if (res.success && res.data) {
+        setIsApproveConfirmOpen(false);
+        setSelectedApp(res.data);
+        await Promise.all([loadApplications(), refreshStats()]);
+      } else {
+        setApprovalError(res.message || 'Approval failed. Please check database permissions or connectivity.');
+      }
+    } catch (err: any) {
+      console.error('Approval failed:', err);
+      setApprovalError(err?.message || 'Unexpected network error during approval.');
+    } finally {
+      setIsApproving(false);
     }
   };
 
@@ -945,18 +957,29 @@ export const ApplicationsTable: React.FC = () => {
               <p>✓ Make the volunteer visible in Approved Volunteers</p>
             </div>
 
+            {/* Error notice if approval fails */}
+            {approvalError && (
+              <div className="p-3 bg-rose-950/80 border border-rose-500 rounded-xl text-xs font-mono text-rose-200">
+                <span className="font-bold text-rose-400 block mb-0.5">⚠️ APPROVAL ERROR:</span>
+                <span>{approvalError}</span>
+              </div>
+            )}
+
             <div className="pt-2 flex items-center justify-end space-x-3">
               <button
                 onClick={() => setIsApproveConfirmOpen(false)}
-                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-mono rounded-xl transition-colors cursor-pointer"
+                disabled={isApproving}
+                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-slate-300 text-xs font-mono rounded-xl transition-colors cursor-pointer"
               >
                 CANCEL
               </button>
               <button
                 onClick={handleConfirmApprove}
-                className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-display font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-emerald-500/25 cursor-pointer"
+                disabled={isApproving}
+                className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-display font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-emerald-500/25 cursor-pointer flex items-center space-x-2"
               >
-                CONFIRM APPROVAL
+                {isApproving && <RefreshCw className="w-4 h-4 animate-spin text-black" />}
+                <span>{isApproving ? 'APPROVING...' : 'CONFIRM APPROVAL'}</span>
               </button>
             </div>
 

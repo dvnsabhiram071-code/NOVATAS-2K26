@@ -43,10 +43,10 @@ interface AppContextType {
   
   // Actions
   submitApplication: (data: Omit<VolunteerApplication, 'id' | 'applicationId' | 'status' | 'submittedAt' | 'checkedIn' | 'isDeleted' | 'volunteerId' | 'qrToken' | 'approvedAt' | 'assignedEvent1' | 'assignedEvent2' | 'volunteerRole'>) => Promise<VolunteerApplication & { isDuplicate?: boolean }>;
-  approveApplication: (id: string, finalEvent?: string, volunteerRole?: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
-  rejectApplication: (id: string, reason: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
+  approveApplication: (idOrApp: string | VolunteerApplication, finalEvent?: string, volunteerRole?: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
+  rejectApplication: (idOrApp: string | VolunteerApplication, reason: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
   deleteApplication: (id: string) => Promise<{ success: boolean; message: string }>;
-  assignVolunteerEvents: (id: string, event1: string, event2?: string, role?: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
+  assignVolunteerEvents: (idOrApp: string | VolunteerApplication, event1: string, event2?: string, role?: string) => Promise<{ success: boolean; message: string; data?: VolunteerApplication }>;
   bulkAssign: (ids: string[], eventName: string) => Promise<{ success: boolean; message: string }>;
   checkInVolunteer: (identifier: string) => Promise<{ success: boolean; volunteer?: VolunteerApplication; message: string }>;
   
@@ -210,16 +210,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Assign Volunteer Events & Role (Pre-approval draft assignment OR post-approval modification)
-  const assignVolunteerEvents = async (id: string, event1: string, event2?: string, role?: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
-    const matchedEvt = events.find(e => e.name.toLowerCase() === event1.toLowerCase());
-    let target = applications.find(a => a.id === id);
-    if (!target) {
-      target = await dbService.fetchApplicationById(id) || undefined;
+  const assignVolunteerEvents = async (idOrApp: string | VolunteerApplication, event1: string, event2?: string, role?: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
+    let target: VolunteerApplication | undefined;
+    const id = typeof idOrApp === 'string' ? idOrApp : idOrApp.id;
+
+    if (typeof idOrApp === 'object' && idOrApp !== null) {
+      target = idOrApp;
+    } else {
+      target = applications.find(a => a.id === id);
+      if (!target) {
+        target = await dbService.fetchApplicationById(id) || undefined;
+      }
     }
     if (!target) {
       return { success: false, message: `Application "${id}" not found.` };
     }
 
+    const matchedEvt = events.find(e => e.name.toLowerCase() === event1.toLowerCase());
     const updated: VolunteerApplication = {
       ...target,
       assignedEvent1: event1,
@@ -231,7 +238,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const res = await dbService.saveApplication(updated);
     if (res.success && res.data) {
-      setApplications(prev => prev.map(app => app.id === id ? res.data! : app));
+      setApplications(prev => {
+        const exists = prev.some(app => app.id === id);
+        if (exists) {
+          return prev.map(app => app.id === id ? res.data! : app);
+        }
+        return [res.data!, ...prev];
+      });
       adminAuthService.logAudit('EVENT_ASSIGNED', 'APPLICATION', id, `Assigned to ${event1}${role ? ` (${role})` : ''}`);
       return { success: true, message: 'Saved and verified in Supabase database.', data: res.data };
     } else {
@@ -241,22 +254,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Approve Application: Strict verification & generation of Volunteer ID + QR
-  const approveApplication = async (id: string, finalEvent?: string, volunteerRole?: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
-    let target = applications.find(a => a.id === id && !a.isDeleted);
-    if (!target) {
-      target = await dbService.fetchApplicationById(id) || undefined;
+  const approveApplication = async (idOrApp: string | VolunteerApplication, finalEvent?: string, volunteerRole?: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
+    let target: VolunteerApplication | undefined;
+    const id = typeof idOrApp === 'string' ? idOrApp : idOrApp.id;
+
+    if (typeof idOrApp === 'object' && idOrApp !== null) {
+      target = idOrApp;
+    } else {
+      target = applications.find(a => a.id === id && !a.isDeleted);
+      if (!target) {
+        target = await dbService.fetchApplicationById(id) || undefined;
+      }
     }
-    if (!target) return { success: false, message: 'Volunteer application not found.' };
+    if (!target) return { success: false, message: `Volunteer application "${id}" not found.` };
 
-    const eventToAssign = finalEvent || target.assignedEvent1;
-    const roleToAssign = volunteerRole || target.volunteerRole;
+    const eventToAssign = finalEvent || target.assignedEvent1 || target.preference1 || (target.preferences && target.preferences[0]) || (events[0]?.name || 'General Coordination');
+    const roleToAssign = volunteerRole || target.volunteerRole || 'Event Coordination';
 
-    if (!eventToAssign || !roleToAssign) {
-      return { success: false, message: 'Cannot approve application: Final event and Volunteer role must both be assigned first.' };
-    }
-
-    const numPart = target.id.replace('NOV26-', '').padStart(5, '0');
-    const volunteerId = target.volunteerId || `NVT26-V${numPart}`;
+    const numPart = target.id.replace(/[^0-9]/g, '').slice(-5).padStart(5, '0');
+    const volunteerId = target.volunteerId || `NVT26-V${numPart || '00001'}`;
     const qrToken = target.qrToken || `sec-${Math.random().toString(36).substring(2, 8)}`;
 
     const matchedEvt = events.find(e => e.name.toLowerCase() === eventToAssign.toLowerCase());
@@ -277,7 +293,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const res = await dbService.saveApplication(updated);
     if (res.success && res.data) {
-      setApplications(prev => prev.map(app => app.id === id ? res.data! : app));
+      setApplications(prev => {
+        const exists = prev.some(app => app.id === id);
+        if (exists) {
+          return prev.map(app => app.id === id ? res.data! : app);
+        }
+        return [res.data!, ...prev];
+      });
       adminAuthService.logAudit('APPLICATION_APPROVED', 'APPLICATION', id, `Approved and assigned to ${eventToAssign}`);
       return { success: true, message: 'Application approved and saved to database.', data: res.data };
     } else {
@@ -286,12 +308,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Reject Application: No Volunteer ID, No QR, No Volunteer Card
-  const rejectApplication = async (id: string, reason: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
-    let target = applications.find(a => a.id === id);
-    if (!target) {
-      target = await dbService.fetchApplicationById(id) || undefined;
+  const rejectApplication = async (idOrApp: string | VolunteerApplication, reason: string): Promise<{ success: boolean; message: string; data?: VolunteerApplication }> => {
+    let target: VolunteerApplication | undefined;
+    const id = typeof idOrApp === 'string' ? idOrApp : idOrApp.id;
+
+    if (typeof idOrApp === 'object' && idOrApp !== null) {
+      target = idOrApp;
+    } else {
+      target = applications.find(a => a.id === id);
+      if (!target) {
+        target = await dbService.fetchApplicationById(id) || undefined;
+      }
     }
-    if (!target) return { success: false, message: 'Application not found.' };
+    if (!target) return { success: false, message: `Application "${id}" not found.` };
 
     const updated: VolunteerApplication = {
       ...target,
@@ -304,7 +333,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const res = await dbService.saveApplication(updated);
     if (res.success && res.data) {
-      setApplications(prev => prev.map(app => app.id === id ? res.data! : app));
+      setApplications(prev => {
+        const exists = prev.some(app => app.id === id);
+        if (exists) {
+          return prev.map(app => app.id === id ? res.data! : app);
+        }
+        return [res.data!, ...prev];
+      });
       adminAuthService.logAudit('APPLICATION_REJECTED', 'APPLICATION', id, `Reason: ${reason}`);
       return { success: true, message: 'Application rejected in database.', data: res.data };
     } else {

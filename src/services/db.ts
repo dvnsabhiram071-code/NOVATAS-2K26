@@ -134,7 +134,13 @@ function resolveSupabaseConfig(): { url: string; key: string; source: 'env' | 's
   envUrl = envUrl.replace(/\/+$/, '').replace(/^["']|["']$/g, '');
   envKey = envKey.replace(/^["']|["']$/g, '');
 
-  if (envUrl && envKey && !envUrl.includes('your-project-id')) {
+  const DEFAULT_SUPABASE_URL = 'https://gbsmuahmouvlstqqyofq.supabase.co';
+
+  if (!envUrl || envUrl.includes('your-project-id')) {
+    envUrl = DEFAULT_SUPABASE_URL;
+  }
+
+  if (envUrl && envKey) {
     return { url: envUrl, key: envKey, source: 'env' };
   }
 
@@ -144,12 +150,16 @@ function resolveSupabaseConfig(): { url: string; key: string; source: 'env' | 's
     storedUrl = storedUrl.replace(/\/+$/, '').replace(/^["']|["']$/g, '');
     storedKey = storedKey.replace(/^["']|["']$/g, '');
 
-    if (storedUrl && storedKey && !storedUrl.includes('your-project-id')) {
+    if (!storedUrl || storedUrl.includes('your-project-id')) {
+      storedUrl = DEFAULT_SUPABASE_URL;
+    }
+
+    if (storedUrl && storedKey) {
       return { url: storedUrl, key: storedKey, source: 'storage' };
     }
   } catch {}
 
-  return { url: '', key: '', source: 'none' };
+  return { url: DEFAULT_SUPABASE_URL, key: '', source: 'none' };
 }
 
 let activeConfig = resolveSupabaseConfig();
@@ -280,7 +290,7 @@ export function toApplicationRow(app: VolunteerApplication) {
     } catch {}
   }
 
-  return {
+  const row: any = {
     id: app.id,
     application_id: app.applicationId || app.id,
     full_name: app.fullName || '',
@@ -289,7 +299,6 @@ export function toApplicationRow(app: VolunteerApplication) {
     section: app.section || 'A',
     mobile: app.mobile || '',
     email: app.email || '',
-    photo_url: app.photoUrl || '',
     preference1: app.preference1 || (app.preferences && app.preferences[0]) || 'General',
     preference2: app.preference2 || (app.preferences && app.preferences[1]) || 'General',
     status: app.status || 'PENDING',
@@ -308,6 +317,12 @@ export function toApplicationRow(app: VolunteerApplication) {
     checked_in_at: safeCheckedInAt,
     is_deleted: Boolean(app.isDeleted),
   };
+
+  if (app.photoUrl !== undefined) {
+    row.photo_url = app.photoUrl;
+  }
+
+  return row;
 }
 
 export const APPLICATION_LIST_COLUMNS = [
@@ -1000,25 +1015,59 @@ class DatabaseService {
 
     try {
       const row = toApplicationRow(app);
+
+      // When updating an existing application, perform a targeted UPDATE first
+      // This avoids unique constraint errors on USN/email and avoids 504 timeouts
+      if (!isNewRegistration) {
+        const updatePayload: any = {
+          status: row.status,
+          assigned_event_1: row.assigned_event_1,
+          assigned_event_2: row.assigned_event_2,
+          assigned_category: row.assigned_category,
+          volunteer_role: row.volunteer_role,
+          volunteer_id: row.volunteer_id,
+          qr_token: row.qr_token,
+          approved_at: row.approved_at,
+          updated_at: new Date().toISOString(),
+          rejection_reason: row.rejection_reason,
+          checked_in: row.checked_in,
+          checked_in_at: row.checked_in_at,
+          is_deleted: row.is_deleted,
+        };
+
+        if (row.photo_url) {
+          updatePayload.photo_url = row.photo_url;
+        }
+
+        const { data: updateData, error: updateError } = await supabase!
+          .from('applications')
+          .update(updatePayload)
+          .eq('id', app.id)
+          .select(APPLICATION_LIST_COLUMNS);
+
+        if (!updateError && updateData && updateData.length > 0) {
+          const verified = mapApplicationRow({ ...toApplicationRow(app), ...(updateData[0] as any) });
+          return { success: true, data: verified, message: 'Saved and verified in Supabase database.' };
+        }
+
+        if (updateError) {
+          console.warn('Update failed, trying upsert:', updateError.message);
+        }
+      }
+
+      // Upsert for new records or if update matched 0 rows
       const { data, error } = await supabase!
         .from('applications')
         .upsert(row, { onConflict: 'id' })
-        .select()
-        .single();
+        .select(APPLICATION_LIST_COLUMNS)
+        .maybeSingle();
 
       if (error) {
-        console.error('Supabase upsert application error:', error);
+        console.error('Supabase save application error:', error);
         return { success: false, message: `Database error: ${error.message}` };
       }
 
-      // Re-fetch directly from Supabase to guarantee that the row was actually updated in the DB
-      const { data: refetched, error: refetchErr } = await supabase!
-        .from('applications')
-        .select('*')
-        .eq('id', app.id)
-        .single();
-
-      const verified = refetched ? mapApplicationRow(refetched) : (data ? mapApplicationRow(data) : app);
+      const verified = data ? mapApplicationRow(data) : app;
       return { success: true, data: verified, message: 'Saved and verified in Supabase database.' };
     } catch (err: any) {
       console.error('Failed to save application to Supabase:', err);
